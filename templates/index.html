@@ -1,0 +1,892 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MangoAI – Intelligent Mango Grade Detector</title>
+  <meta name="description" content="Upload a mango photo and let our AI model instantly classify it into Grade 1–4 with confidence scores. Powered by MobileNetV3 deep learning.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* ── Design tokens ─────────────────────────────────────── */
+    :root {
+      --bg:          #080d0b;
+      --bg2:         #0d1510;
+      --surface:     rgba(255,255,255,0.04);
+      --surface-h:   rgba(255,255,255,0.08);
+      --border:      rgba(255,255,255,0.08);
+      --border-h:    rgba(130,255,120,0.35);
+      --neon:        #6dff5c;
+      --neon2:       #3ddc84;
+      --neon-dim:    rgba(109,255,92,0.15);
+      --neon-glow:   rgba(109,255,92,0.35);
+      --amber:       #ffb830;
+      --text:        #e8f0e6;
+      --text-muted:  #6b8068;
+      --text-dim:    #4a5e48;
+      --radius-lg:   24px;
+      --radius-md:   16px;
+      --radius-sm:   10px;
+    }
+
+    /* ── Reset & base ──────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', system-ui, sans-serif;
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* ── Animated mesh background ──────────────────────────── */
+    .bg-mesh {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+    }
+    .bg-mesh::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 70% 60% at 10% 10%, rgba(61,220,132,0.07) 0%, transparent 55%),
+        radial-gradient(ellipse 50% 50% at 90% 80%, rgba(109,255,92,0.05) 0%, transparent 50%),
+        radial-gradient(ellipse 40% 40% at 50% 50%, rgba(255,184,48,0.03) 0%, transparent 50%);
+      animation: meshMove 12s ease-in-out infinite alternate;
+    }
+    @keyframes meshMove {
+      from { transform: scale(1) translate(0,0); }
+      to   { transform: scale(1.05) translate(-15px, 10px); }
+    }
+
+    /* Grid dots */
+    .bg-mesh::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image: radial-gradient(rgba(109,255,92,0.08) 1px, transparent 1px);
+      background-size: 42px 42px;
+      mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 20%, transparent 100%);
+    }
+
+    /* ── Layout wrapper ────────────────────────────────────── */
+    .page-wrap {
+      position: relative;
+      z-index: 1;
+      max-width: 1060px;
+      margin: 0 auto;
+      padding: 60px 24px 80px;
+    }
+
+    /* ── Nav bar ───────────────────────────────────────────── */
+    nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 64px;
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 1.3rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+    .logo-icon {
+      width: 36px; height: 36px;
+      background: linear-gradient(135deg, var(--neon), var(--neon2));
+      border-radius: 10px;
+      display: grid;
+      place-items: center;
+      font-size: 1.1rem;
+      box-shadow: 0 0 18px var(--neon-glow);
+    }
+    .logo-text { color: var(--text); }
+    .logo-dot  { color: var(--neon); }
+    .badge {
+      padding: 6px 14px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--neon);
+      background: var(--neon-dim);
+    }
+
+    /* ── Hero section ──────────────────────────────────────── */
+    .hero {
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 32px;
+      align-items: center;
+      margin-bottom: 48px;
+    }
+    .hero-eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--neon);
+      margin-bottom: 20px;
+    }
+    .hero-eyebrow::before {
+      content: '';
+      width: 22px; height: 2px;
+      background: var(--neon);
+      border-radius: 2px;
+    }
+    h1 {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: clamp(2.6rem, 6vw, 4.2rem);
+      font-weight: 700;
+      letter-spacing: -0.04em;
+      line-height: 1.08;
+      margin-bottom: 20px;
+    }
+    h1 .highlight {
+      background: linear-gradient(90deg, var(--neon), var(--amber));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero-desc {
+      font-size: 1rem;
+      color: var(--text-muted);
+      line-height: 1.7;
+      max-width: 480px;
+    }
+    .hero-img-wrap {
+      position: relative;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    .hero-img-wrap::before {
+      content: '';
+      position: absolute;
+      inset: -20px;
+      background: radial-gradient(circle, var(--neon-glow) 0%, transparent 70%);
+      border-radius: 50%;
+      animation: pulse 3s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 0.5; transform: scale(1); }
+      50% { opacity: 1; transform: scale(1.06); }
+    }
+    .hero-img {
+      width: 100%;
+      max-width: 300px;
+      border-radius: 50%;
+      object-fit: cover;
+      aspect-ratio: 1;
+      position: relative;
+      filter: drop-shadow(0 0 40px rgba(109,255,92,0.4));
+      animation: float 5s ease-in-out infinite;
+    }
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-12px); }
+    }
+
+    /* ── Stats strip ───────────────────────────────────────── */
+    .stats-strip {
+      display: flex;
+      gap: 1px;
+      background: var(--border);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      margin-bottom: 40px;
+    }
+    .stat {
+      flex: 1;
+      padding: 18px 20px;
+      background: var(--surface);
+      text-align: center;
+      transition: background 0.2s;
+    }
+    .stat:hover { background: var(--surface-h); }
+    .stat-val {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: var(--neon);
+      line-height: 1;
+      margin-bottom: 4px;
+    }
+    .stat-label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-weight: 500;
+      letter-spacing: 0.04em;
+    }
+
+    /* ── Main grid (upload + info) ─────────────────────────── */
+    .main-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(260px, 0.85fr);
+      gap: 20px;
+      align-items: start;
+    }
+
+    /* ── Glass card ────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 28px;
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      transition: border-color 0.3s;
+    }
+    .card:hover { border-color: rgba(109,255,92,0.15); }
+    .card-title {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 0.8rem;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--neon);
+      margin-bottom: 18px;
+    }
+
+    /* ── Drop zone ─────────────────────────────────────────── */
+    .drop-area {
+      min-height: 260px;
+      border: 2px dashed var(--border);
+      border-radius: var(--radius-md);
+      background: rgba(255,255,255,0.02);
+      display: grid;
+      place-items: center;
+      text-align: center;
+      padding: 24px;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+      position: relative;
+      overflow: hidden;
+    }
+    .drop-area::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse at center, var(--neon-dim) 0%, transparent 70%);
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    .drop-area:hover::before,
+    .drop-area.dragging::before { opacity: 1; }
+    .drop-area:hover,
+    .drop-area.dragging {
+      border-color: var(--neon);
+      box-shadow: 0 0 32px rgba(109,255,92,0.12), inset 0 0 24px rgba(109,255,92,0.05);
+    }
+    .drop-icon {
+      width: 60px; height: 60px;
+      background: linear-gradient(135deg, rgba(109,255,92,0.15), rgba(61,220,132,0.1));
+      border: 1px solid rgba(109,255,92,0.25);
+      border-radius: 18px;
+      display: grid;
+      place-items: center;
+      margin: 0 auto 16px;
+      font-size: 1.6rem;
+      position: relative;
+      animation: iconBob 2.5s ease-in-out infinite;
+    }
+    @keyframes iconBob {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-4px); }
+    }
+    .drop-inner { position: relative; }
+    .drop-title {
+      font-weight: 600;
+      font-size: 1rem;
+      margin-bottom: 6px;
+      color: var(--text);
+    }
+    .drop-sub {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin-bottom: 18px;
+    }
+    .browse-btn {
+      display: inline-block;
+      padding: 10px 22px;
+      background: rgba(109,255,92,0.1);
+      border: 1px solid rgba(109,255,92,0.3);
+      border-radius: var(--radius-sm);
+      color: var(--neon);
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s, box-shadow 0.2s, transform 0.15s;
+    }
+    .browse-btn:hover {
+      background: rgba(109,255,92,0.18);
+      box-shadow: 0 0 18px rgba(109,255,92,0.25);
+      transform: translateY(-1px);
+    }
+    input[type="file"] {
+      position: absolute; width: 1px; height: 1px;
+      overflow: hidden; clip: rect(0,0,0,0);
+    }
+    .file-name {
+      margin-top: 14px;
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      min-height: 18px;
+      transition: color 0.2s;
+    }
+    .file-name.has-file { color: var(--neon); }
+
+    /* ── Preview image inside drop zone ────────────────────── */
+    #preview-img {
+      display: none;
+      max-width: 100%;
+      max-height: 200px;
+      margin-top: 14px;
+      border-radius: var(--radius-sm);
+      object-fit: contain;
+      border: 1px solid var(--border);
+    }
+    #preview-img.visible { display: block; }
+
+    /* ── Submit button ─────────────────────────────────────── */
+    .submit-btn {
+      width: 100%;
+      margin-top: 18px;
+      padding: 15px;
+      border: 0;
+      border-radius: var(--radius-md);
+      background: linear-gradient(135deg, #4dcc45, #2eaa6e);
+      color: #051208;
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 0.95rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.15s, box-shadow 0.2s;
+      box-shadow: 0 4px 24px rgba(77,204,69,0.3);
+      position: relative;
+      overflow: hidden;
+    }
+    .submit-btn::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(255,255,255,0.15), transparent);
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    .submit-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(77,204,69,0.4); }
+    .submit-btn:hover::after { opacity: 1; }
+    .submit-btn:active { transform: translateY(0); }
+    .submit-btn:focus-visible { outline: 3px solid var(--neon); outline-offset: 3px; }
+
+    .submit-btn .btn-spinner { display: none; }
+    .submit-btn.loading .btn-text { display: none; }
+    .submit-btn.loading .btn-spinner { display: inline; }
+    .submit-btn.loading { pointer-events: none; }
+
+    /* ── Error message ─────────────────────────────────────── */
+    .error-msg {
+      margin-bottom: 20px;
+      padding: 14px 16px;
+      border: 1px solid rgba(255,80,80,0.25);
+      border-radius: var(--radius-sm);
+      background: rgba(255,60,60,0.08);
+      color: #ff8080;
+      font-size: 0.88rem;
+      line-height: 1.55;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+    .error-icon { font-size: 1rem; flex-shrink: 0; margin-top: 1px; }
+
+    /* ── Info panel (right column) ─────────────────────────── */
+    .info-panel { display: flex; flex-direction: column; gap: 16px; }
+
+    .steps-list { display: flex; flex-direction: column; gap: 14px; }
+    .step-item {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+    }
+    .step-num {
+      flex-shrink: 0;
+      width: 26px; height: 26px;
+      background: var(--neon-dim);
+      border: 1px solid rgba(109,255,92,0.3);
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      font-size: 0.72rem;
+      font-weight: 800;
+      color: var(--neon);
+    }
+    .step-text { font-size: 0.88rem; color: var(--text-muted); line-height: 1.5; padding-top: 3px; }
+
+    .grades-wrap { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+    .grade-chip {
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--neon);
+      background: var(--neon-dim);
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .grade-chip:hover {
+      border-color: rgba(109,255,92,0.4);
+      box-shadow: 0 0 10px rgba(109,255,92,0.15);
+    }
+
+    .notice-box {
+      padding: 13px 14px;
+      border-radius: var(--radius-sm);
+      background: rgba(255,184,48,0.07);
+      border: 1px solid rgba(255,184,48,0.2);
+      font-size: 0.8rem;
+      color: #c9975a;
+      line-height: 1.55;
+    }
+    .notice-box .notice-icon { margin-right: 6px; }
+
+    /* ── Result card ───────────────────────────────────────── */
+    .result-card {
+      grid-column: 1 / -1;
+      animation: fadeSlideUp 0.5s ease-out;
+    }
+    .result-card--invalid {
+      border-color: rgba(255, 80, 80, 0.3) !important;
+      background: rgba(255, 40, 40, 0.05) !important;
+      box-shadow: 0 0 40px rgba(255, 60, 60, 0.08), inset 0 0 30px rgba(255, 40, 40, 0.04);
+    }
+    .result-card--invalid:hover {
+      border-color: rgba(255, 80, 80, 0.5) !important;
+    }
+    .result-card--invalid .result-grade {
+      background: linear-gradient(90deg, #ff6b6b, #ff3b3b) !important;
+      -webkit-background-clip: text !important;
+      -webkit-text-fill-color: transparent !important;
+      background-clip: text !important;
+    }
+    .result-card--invalid .result-eyebrow {
+      color: #ff6b6b !important;
+    }
+    @keyframes fadeSlideUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .result-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    .result-eyebrow {
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--neon);
+      margin-bottom: 6px;
+    }
+    .result-grade {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: clamp(2.2rem, 5vw, 3.2rem);
+      font-weight: 700;
+      letter-spacing: -0.04em;
+      background: linear-gradient(90deg, var(--neon), var(--amber));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      line-height: 1.1;
+      margin-bottom: 4px;
+    }
+    .result-meta { font-size: 0.88rem; color: var(--text-muted); }
+    .result-status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 600;
+    }
+    .status-valid   { background: rgba(109,255,92,0.12); border: 1px solid rgba(109,255,92,0.35); color: var(--neon); }
+    .status-warn    { background: rgba(255,184,48,0.12); border: 1px solid rgba(255,184,48,0.3); color: var(--amber); }
+    .status-invalid { background: rgba(255,80,80,0.12); border: 1px solid rgba(255,80,80,0.25); color: #ff8080; }
+    .status-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      animation: blink 1.4s ease-in-out infinite;
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    /* ── Score bars ────────────────────────────────────────── */
+    .scores-grid { display: flex; flex-direction: column; gap: 14px; }
+    .score-row {
+      display: grid;
+      grid-template-columns: 80px 1fr 58px;
+      gap: 14px;
+      align-items: center;
+    }
+    .score-label { font-size: 0.85rem; color: var(--text-muted); font-weight: 500; }
+    .score-track {
+      height: 8px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.06);
+      overflow: hidden;
+    }
+    .score-fill {
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--neon2), var(--neon));
+      box-shadow: 0 0 8px rgba(109,255,92,0.4);
+      width: 0%;
+      transition: width 1s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .score-fill.is-top {
+      background: linear-gradient(90deg, var(--neon), var(--amber));
+      box-shadow: 0 0 12px rgba(109,255,92,0.5);
+    }
+    .score-val {
+      font-size: 0.83rem;
+      color: var(--text);
+      font-weight: 600;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ── Footer ────────────────────────────────────────────── */
+    footer {
+      margin-top: 52px;
+      padding-top: 28px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+      font-size: 0.78rem;
+      color: var(--text-dim);
+    }
+    .footer-brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+    .footer-logo-icon {
+      width: 22px; height: 22px;
+      border-radius: 6px;
+      background: var(--neon-dim);
+      border: 1px solid rgba(109,255,92,0.2);
+      display: grid;
+      place-items: center;
+      font-size: 0.7rem;
+    }
+
+    /* ── Responsive ────────────────────────────────────────── */
+    @media (max-width: 780px) {
+      .hero { grid-template-columns: 1fr; text-align: center; }
+      .hero-eyebrow { justify-content: center; }
+      .hero-desc { margin: 0 auto; }
+      .hero-img-wrap { order: -1; }
+      .hero-img { max-width: 180px; }
+      .stats-strip { flex-direction: column; gap: 0; }
+      .main-grid { grid-template-columns: 1fr; }
+      .result-card { grid-column: auto; }
+      .score-row { grid-template-columns: 72px 1fr 50px; }
+    }
+
+    @media (max-width: 480px) {
+      .page-wrap { padding: 36px 16px 60px; }
+      nav { margin-bottom: 40px; }
+      .card { padding: 20px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Animated mesh background -->
+  <div class="bg-mesh" aria-hidden="true"></div>
+
+  <div class="page-wrap">
+
+    <!-- Nav -->
+    <nav>
+      <div class="logo">
+        <div class="logo-icon">🥭</div>
+        <span class="logo-text">Mango<span class="logo-dot">AI</span></span>
+      </div>
+      <span class="badge">AI · MobileNetV3</span>
+    </nav>
+
+    <!-- Hero -->
+    <section class="hero" aria-label="Mango Grade Detector hero">
+      <div>
+        <div class="hero-eyebrow">Mango Quality · Image Grading</div>
+        <h1>What grade is<br>your <span class="highlight">mango?</span></h1>
+        <p class="hero-desc">Upload a clear exterior photo and let our deep-learning model instantly classify your mango into one of four quality grades with full confidence scores.</p>
+      </div>
+      <div class="hero-img-wrap">
+        <img src="{{ url_for('static', filename='mango_hero.jpg') }}" alt="Glowing mango with neon ring" class="hero-img">
+      </div>
+    </section>
+
+    <!-- Stats strip -->
+    <div class="stats-strip" role="list" aria-label="Model statistics">
+      <div class="stat" role="listitem">
+        <div class="stat-val">4</div>
+        <div class="stat-label">Grade Classes</div>
+      </div>
+      <div class="stat" role="listitem">
+        <div class="stat-val">224px</div>
+        <div class="stat-label">Input Resolution</div>
+      </div>
+      <div class="stat" role="listitem">
+        <div class="stat-val">50 MB</div>
+        <div class="stat-label">Max Upload</div>
+      </div>
+      <div class="stat" role="listitem">
+        <div class="stat-val">RGB</div>
+        <div class="stat-label">Color Mode</div>
+      </div>
+    </div>
+
+    <!-- Error banner -->
+    {% if message %}
+    <div class="error-msg" role="alert" id="error-banner">
+      <span class="error-icon">&#9888;&#65039;</span>
+      <span>{{ message }}</span>
+    </div>
+    {% endif %}
+
+    <!-- Main grid -->
+    <div class="main-grid">
+
+      <!-- Upload card -->
+      <section class="card" aria-labelledby="upload-title">
+        <div class="card-title" id="upload-title">&#128228;&nbsp; Upload Image</div>
+        <form action="{{ url_for('predict') }}" method="post" enctype="multipart/form-data" id="grade-form">
+          <div class="drop-area" id="drop-area" role="button" tabindex="0" aria-label="Drop mango image here or click to browse">
+            <div class="drop-inner">
+              <div class="drop-icon" aria-hidden="true">&#128247;</div>
+              <div class="drop-title">Drop your mango photo here</div>
+              <div class="drop-sub">JPG, PNG, WebP, BMP or TIFF &middot; up to 50 MB</div>
+              <label class="browse-btn" for="image">Choose image</label>
+              <input id="image" name="image" type="file" accept="image/*" required>
+              <div class="file-name" id="file-name" aria-live="polite">No file selected</div>
+            </div>
+          </div>
+
+          <img id="preview-img" alt="Preview of your selected mango image">
+
+          <button type="submit" class="submit-btn" id="submit-btn">
+            <span class="btn-text">&#128269;&nbsp; Detect Grade</span>
+            <span class="btn-spinner">&#9203;&nbsp; Analysing&hellip;</span>
+          </button>
+        </form>
+      </section>
+
+      <!-- Info panel -->
+      <aside class="info-panel">
+        <div class="card">
+          <div class="card-title">&#128161;&nbsp; Photo Tips</div>
+          <div class="steps-list">
+            <div class="step-item">
+              <div class="step-num">1</div>
+              <div class="step-text">Use one whole mango with the exterior skin clearly visible.</div>
+            </div>
+            <div class="step-item">
+              <div class="step-num">2</div>
+              <div class="step-text">Ensure bright, even lighting and keep the fruit in focus.</div>
+            </div>
+            <div class="step-item">
+              <div class="step-num">3</div>
+              <div class="step-text">Use a simple, plain background &mdash; avoid collages or screenshots.</div>
+            </div>
+            <div class="step-item">
+              <div class="step-num">4</div>
+              <div class="step-text">Readable image file, max 50 MB and under 20 megapixels.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">&#127991;&nbsp; Grade Classes</div>
+          <div class="grades-wrap" aria-label="Possible grades">
+            <span class="grade-chip">Grade 1</span>
+            <span class="grade-chip">Grade 2</span>
+            <span class="grade-chip">Grade 3</span>
+            <span class="grade-chip">Grade 4</span>
+          </div>
+        </div>
+
+        <div class="notice-box">
+          <span class="notice-icon">&#9888;&#65039;</span>
+          Model scores are not guaranteed accuracy. A single exterior photo cannot determine the mango's internal condition.
+        </div>
+      </aside>
+
+      <!-- Result card (conditionally rendered) -->
+      {% if result %}
+        {% if result.status == "NON_MANGO" or result.status == "VALIDITY_UNAVAILABLE" %}
+        <section class="card result-card result-card--invalid" aria-live="polite" aria-label="Prediction result">
+          <div class="result-header">
+            <div>
+              <div class="result-eyebrow">Detection Result</div>
+              <div class="result-grade" style="font-size:2rem;">Invalid</div>
+              <div class="result-meta">This image was not recognised as a mango.</div>
+            </div>
+            <span class="result-status-badge status-invalid"><span class="status-dot"></span>Invalid</span>
+          </div>
+        </section>
+
+        {% elif result.predicted_grade and result.status == "GRADED" %}
+        <section class="card result-card" aria-live="polite" aria-label="Prediction result">
+          <div class="result-header">
+            <div class="result-grade-wrap">
+              <div class="result-eyebrow">Detection Result</div>
+              <div class="result-grade">{{ result.predicted_grade|title }}</div>
+              <div class="result-meta">Top confidence: {{ "%.1f"|format(result.grade_confidence * 100) }}%</div>
+            </div>
+            <span class="result-status-badge status-valid"><span class="status-dot"></span>Mango Verified</span>
+          </div>
+
+          <div class="card-title" style="margin-bottom:14px;">&#128202;&nbsp; All Grade Scores</div>
+          <div class="scores-grid" id="scores-grid">
+            {% set top_grade = result.predicted_grade %}
+            {% for grade, score in result.class_scores.items() %}
+            <div class="score-row">
+              <span class="score-label">{{ grade|title }}</span>
+              <div class="score-track">
+                <div
+                  class="score-fill {% if grade == top_grade %}is-top{% endif %}"
+                  data-target="{{ (score * 100)|round(1) }}"
+                  style="width: 0%"
+                ></div>
+              </div>
+              <span class="score-val">{{ "%.1f"|format(score * 100) }}%</span>
+            </div>
+            {% endfor %}
+          </div>
+        </section>
+
+        {% else %}
+        <section class="card result-card result-card--invalid" aria-live="polite" aria-label="Prediction result">
+          <div class="result-header">
+            <div>
+              <div class="result-eyebrow">Detection Result</div>
+              <div class="result-grade" style="font-size:2rem;">Could Not Grade</div>
+              <div class="result-meta">{{ result.status }}</div>
+            </div>
+            <span class="result-status-badge status-invalid"><span class="status-dot"></span>Error</span>
+          </div>
+        </section>
+        {% endif %}
+      {% endif %}
+
+
+    </div><!-- /.main-grid -->
+
+    <!-- Footer -->
+    <footer>
+      <div class="footer-brand">
+        <div class="footer-logo-icon">&#129363;</div>
+        MangoAI Grade Detector
+      </div>
+      <span>Images are processed temporarily and are not stored. Predictions depend on the trained model and its training data.</span>
+    </footer>
+
+  </div><!-- /.page-wrap -->
+
+  <script>
+    /* ── File input / drag-and-drop ───────────────────────── */
+    const input      = document.getElementById('image');
+    const fileNameEl = document.getElementById('file-name');
+    const dropArea   = document.getElementById('drop-area');
+    const previewImg = document.getElementById('preview-img');
+    const form       = document.getElementById('grade-form');
+    const submitBtn  = document.getElementById('submit-btn');
+
+    function handleFile(file) {
+      if (!file) return;
+      fileNameEl.textContent = file.name;
+      fileNameEl.classList.add('has-file');
+      const reader = new FileReader();
+      reader.onload = e => {
+        previewImg.src = e.target.result;
+        previewImg.classList.add('visible');
+      };
+      reader.readAsDataURL(file);
+    }
+
+    input.addEventListener('change', () => {
+      if (input.files.length) handleFile(input.files[0]);
+    });
+
+    ['dragenter', 'dragover'].forEach(evt => {
+      dropArea.addEventListener(evt, e => { e.preventDefault(); dropArea.classList.add('dragging'); });
+    });
+    ['dragleave', 'drop'].forEach(evt => {
+      dropArea.addEventListener(evt, e => { e.preventDefault(); dropArea.classList.remove('dragging'); });
+    });
+    dropArea.addEventListener('drop', e => {
+      if (e.dataTransfer.files.length) {
+        input.files = e.dataTransfer.files;
+        handleFile(e.dataTransfer.files[0]);
+      }
+    });
+    dropArea.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); }
+    });
+
+    /* ── Submit loading state ─────────────────────────────── */
+    form.addEventListener('submit', () => { submitBtn.classList.add('loading'); });
+
+    /* ── Animate score bars on page load ──────────────────── */
+    function animateScoreBars() {
+      const fills = document.querySelectorAll('.score-fill[data-target]');
+      if (!fills.length) return;
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          fills.forEach(el => { el.style.width = el.dataset.target + '%'; });
+        }, 200);
+      });
+    }
+    animateScoreBars();
+
+    /* ── Scroll result into view ──────────────────────────── */
+    const resultCard = document.querySelector('.result-card');
+    if (resultCard) {
+      resultCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  </script>
+
+</body>
+</html>

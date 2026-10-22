@@ -1,0 +1,93 @@
+{
+  "session_id": "9905c8a01c394b3089db84ee51373875",
+  "preprocessing": {
+    "image_size": [
+      224,
+      224
+    ],
+    "resize": "TensorFlow bilinear",
+    "channels": "RGB",
+    "dtype": "float32",
+    "value_range": [
+      0,
+      255
+    ],
+    "training_compatibility_verified": false
+  },
+  "score_label": "Model scores; not guaranteed accuracy.",
+  "per_side": {
+    "right": {
+      "image_path": "/Users/rahulchavan3134gmail.com/Desktop/imp/captures/9905c8a01c394b3089db84ee51373875/raw/right.jpg",
+      "status": "VALIDITY_UNAVAILABLE",
+      "validity_confidence": null,
+      "validity_status": "UNAVAILABLE",
+      "predicted_grade": "grade 4",
+      "grade_confidence": 0.9809446334838867,
+      "class_scores": {
+        "grade 1": 1.83476058737142e-05,
+        "grade 2": 7.678395922994241e-05,
+        "grade 3": 0.01896020583808422,
+        "grade 4": 0.9809446334838867
+      }
+    },
+    "left": {
+      "image_path": "/Users/rahulchavan3134gmail.com/Desktop/imp/captures/9905c8a01c394b3089db84ee51373875/raw/left.jpg",
+      "status": "VALIDITY_UNAVAILABLE",
+      "validity_confidence": null,
+      "validity_status": "UNAVAILABLE",
+      "predicted_grade": "grade 4",
+      "grade_confidence": 0.6140245795249939,
+      "class_scores": {
+        "grade 1": 1.5130866813706234e-05,
+        "grade 2": 5.1232676923973486e-05,
+        "grade 3": 0.3859090209007263,
+        "grade 4": 0.6140245795249939
+      }
+    },
+    "front": {
+      "image_path": "/Users/rahulchavan3134gmail.com/Desktop/imp/captures/9905c8a01c394b3089db84ee51373875/raw/front.jpg",
+      "status": "VALIDITY_UNAVAILABLE",
+      "validity_confidence": null,
+      "validity_status": "UNAVAILABLE",
+      "predicted_grade": "grade 4",
+      "grade_confidence": 0.9995061159133911,
+      "class_scores": {
+        "grade 1": 5.995331520125546e-08,
+        "grade 2": 7.474557150999317e-06,
+        "grade 3": 0.0004863725043833256,
+        "grade 4": 0.9995061159133911
+      }
+    },
+    "back": {
+      "image_path": "/Users/rahulchavan3134gmail.com/Desktop/imp/captures/9905c8a01c394b3089db84ee51373875/raw/back.jpg",
+      "status": "VALIDITY_UNAVAILABLE",
+      "validity_confidence": null,
+      "validity_status": "UNAVAILABLE",
+      "predicted_grade": "grade 4",
+      "grade_confidence": 0.9524099826812744,
+      "class_scores": {
+        "grade 1": 0.00021430653578136116,
+        "grade 2": 0.0019728229381144047,
+        "grade 3": 0.04540286958217621,
+        "grade 4": 0.9524099826812744
+      }
+    }
+  },
+  "status": "VALIDITY_UNAVAILABLE",
+  "predicted_grade": "grade 4",
+  "vote_counts": {
+    "grade 1": 0,
+    "grade 2": 0,
+    "grade 3": 0,
+    "grade 4": 4
+  },
+  "winning_votes": 4,
+  "average_model_scores": {
+    "grade 4": 0.8867213279008865
+  },
+  "limitations": [
+    "Mango validation unavailable; grade outputs are for mangoes only.",
+    "External RGB views do not establish internal mango condition."
+  ],
+  "announcement": "Final result: Grade 4, supported by 4 of 4 views."
+}

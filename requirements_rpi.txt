@@ -1,0 +1,26 @@
+# ── Core model dependencies (same as requirements.txt) ──────────────────────
+tensorflow==2.16.2
+numpy==1.26.4
+Pillow==11.3.0
+scipy==1.13.1
+scikit-learn==1.5.2
+joblib==1.5.3
+Flask==3.1.1
+
+# ── Camera ───────────────────────────────────────────────────────────────────
+# Pi Camera Module (install via apt, NOT pip):
+#   sudo apt install -y python3-picamera2 python3-libcamera
+# USB webcam fallback:
+opencv-python==4.10.0.84
+
+# ── OLED display (SSD1306, I2C) ──────────────────────────────────────────────
+# Option A – luma.oled (recommended):
+luma.oled>=3.13.0
+luma.core>=2.4.0
+
+# Option B – Adafruit (uncomment if using Adafruit_SSD1306 instead):
+# Adafruit-SSD1306>=1.6.2
+# RPi.GPIO>=0.7.1
+
+# ── GPIO button ───────────────────────────────────────────────────────────────
+RPi.GPIO>=0.7.1
