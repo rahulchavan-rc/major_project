@@ -839,7 +839,20 @@ if __name__ == "__main__":
         parser.error("provide an image/folder path or use --camera")
 
     if args.camera:
-        capture_photos(args.camera_index)
+        try:
+            capture_photos(args.camera_index)
+        except FileNotFoundError as exc:
+            print("\n" + "=" * 72)
+            print("PREDICTION UNAVAILABLE")
+            print("=" * 72)
+            print("No grade was produced because the trained grade model is missing.")
+            print(f"\nDetails: {exc}")
+            print(
+                "\nPlace your existing trained .keras model at one of the listed "
+                "paths, then rerun this command. This program will load it for "
+                "inference only; it will not train or change model weights."
+            )
+            raise SystemExit(2) from exc
     else:
         try:
             v_model = load_validity_model()
