@@ -1,5 +1,5 @@
 """
-rpi_camera.py – Raspberry Pi mango grader with OLED display.
+rpi_camera.py – Raspberry Pi mango grader with OLED display + voice.
 
 Auto-detects camera:
   1. Raspberry Pi Camera Module via picamera2 (libcamera)
@@ -9,6 +9,11 @@ Captures 4 views (Right → Left → Front → Back) using a physical button
 (GPIO 17, active-low) or keyboard Enter, then predicts the mango grade
 using the trained model and shows the final result on a 1.3-inch
 SSD1306 OLED display (128×64, I2C).
+
+Non-mango fallback:
+  When the validity model is not installed, objects whose grade-model
+  confidence is below MIN_CONF_THRESHOLD are marked INVALID so that
+  non-mangoes are not silently graded.
 
 Hardware wiring (Raspberry Pi GPIO):
   OLED (SSD1306, I2C):
@@ -25,13 +30,18 @@ Usage:
     python rpi_camera.py --camera-index 1
     python rpi_camera.py --no-display
     python rpi_camera.py --no-button
+    python rpi_camera.py --no-voice
 """
 
 from __future__ import annotations
 
 import argparse
+import queue
 import select
+import shutil
+import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -41,14 +51,123 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import use_model  # noqa: E402
 
-CAMERA_SIDES  = ("right", "left", "front", "back")
-OLED_WIDTH    = 128
-OLED_HEIGHT   = 64
-BUTTON_PIN    = 17
+CAMERA_SIDES = ("right", "left", "front", "back")
+OLED_WIDTH   = 128
+OLED_HEIGHT  = 64
+BUTTON_PIN   = 17
 CAPTURE_DELAY = 0.25
 
+# ── If the validity model is absent, any side whose grade-model confidence
+#    is below this threshold causes the whole result to be marked INVALID.
+#    Tune between 0.30–0.50 depending on your test results.
+MIN_CONF_THRESHOLD = 0.40
 
-# ── OLED helpers ──────────────────────────────────────────────────────────────
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Voice helper (espeak-ng / espeak)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class _Voice:
+    """Non-blocking text-to-speech using espeak-ng (Linux / Raspberry Pi)."""
+
+    def __init__(self) -> None:
+        self.cmd = shutil.which("espeak-ng") or shutil.which("espeak")
+        if self.cmd is None:
+            print("[Voice] espeak-ng not found. Install: sudo apt install espeak-ng")
+        else:
+            print(f"[Voice] Using '{self.cmd}' for announcements.")
+
+        self._q: queue.Queue[str | None] = queue.Queue()
+        self._stop = threading.Event()
+        if self.cmd:
+            self._thread = threading.Thread(target=self._worker, daemon=True)
+            self._thread.start()
+
+    def say(self, text: str) -> None:
+        """Queue a message (latest replaces older unplayed ones)."""
+        if self.cmd and not self._stop.is_set():
+            # Drain old queued messages so only the latest plays
+            while not self._q.empty():
+                try:
+                    self._q.get_nowait()
+                except queue.Empty:
+                    break
+            self._q.put(text)
+            print(f"[Voice] {text}")
+
+    def say_wait(self, text: str) -> None:
+        """Speak and block until finished (used for important announcements)."""
+        if self.cmd and not self._stop.is_set():
+            print(f"[Voice] {text}")
+            try:
+                subprocess.run(
+                    [self.cmd, text],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except OSError:
+                pass
+
+    def _worker(self) -> None:
+        while not self._stop.is_set():
+            try:
+                text = self._q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if text is None:
+                return
+            try:
+                subprocess.run(
+                    [self.cmd, text],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except OSError:
+                self.cmd = None
+                return
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._q.put(None)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Non-mango fallback (confidence threshold)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _apply_confidence_gate(result: dict) -> dict:
+    """
+    When the validity model is unavailable, use a confidence threshold to
+    reject likely non-mango objects.
+
+    If ANY per-side grade confidence is below MIN_CONF_THRESHOLD, override
+    result status to NON_MANGO and clear the predicted grade.
+    """
+    if result.get("status") != "VALIDITY_UNAVAILABLE":
+        return result   # validity model handled it already
+
+    per_side = result.get("per_side", {})
+    low_sides = []
+    for side, side_res in per_side.items():
+        conf = side_res.get("grade_confidence") or 0.0
+        if conf < MIN_CONF_THRESHOLD:
+            low_sides.append(f"{side}({conf*100:.0f}%)")
+
+    if low_sides:
+        print(f"[Gate] Low confidence on sides {low_sides} → marking INVALID")
+        result = dict(result)
+        result["status"]          = "NON_MANGO"
+        result["predicted_grade"] = None
+        result["rejection_reason"] = (
+            f"confidence_below_threshold_{MIN_CONF_THRESHOLD}_on_{','.join(low_sides)}"
+        )
+
+    return result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# OLED helpers
+# ══════════════════════════════════════════════════════════════════════════════
 
 def _load_oled():
     try:
@@ -77,30 +196,32 @@ def _load_oled():
 
 
 def _oled_render(device, driver: str, lines: list[str]) -> None:
-    """Render lines on OLED. First line uses large font, rest use default."""
+    """Render lines on OLED. First line uses large bold font, rest use small."""
     from PIL import Image as PILImage, ImageDraw, ImageFont
     image = PILImage.new("1", (OLED_WIDTH, OLED_HEIGHT), 0)
     draw  = ImageDraw.Draw(image)
 
-    # Try to load a larger font for the main result line
-    try:
-        large_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
-    except Exception:
+    # Try bold large font for headline
+    large_font = None
+    for font_path in [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    ]:
         try:
-            large_font = ImageFont.truetype("/usr/share/fonts/truetype/freefont/FreeSansBold.ttf", 20)
+            large_font = ImageFont.truetype(font_path, 20)
+            break
         except Exception:
-            large_font = ImageFont.load_default()
+            continue
+    if large_font is None:
+        large_font = ImageFont.load_default()
 
-    try:
-        small_font = ImageFont.load_default()
-    except Exception:
-        small_font = large_font
+    small_font = ImageFont.load_default()
 
-    # Line 0 → large font, lines 1+ → small font
     y = 2
     for i, line in enumerate(lines):
-        font   = large_font if i == 0 else small_font
-        lh     = 22 if i == 0 else 13
+        font = large_font if i == 0 else small_font
+        lh   = 22 if i == 0 else 13
         draw.text((2, y), line, fill=255, font=font)
         y += lh
 
@@ -124,38 +245,38 @@ def _oled_clear(device, driver: str) -> None:
 
 
 def _oled_status(device, driver: str, l1: str, l2: str = "") -> None:
+    """Show a 2-line status on OLED (both small font)."""
     if device is None:
         return
-    _oled_render(device, driver, ["  MangoAI", "-" * 16, f"  {l1}", f"  {l2}"])
+    _oled_render(device, driver, [l1, l2])
 
 
 def _oled_result(device, driver: str, result: dict) -> None:
-    """Show clean result on OLED: Grade + confidence, or INVALID."""
+    """Show clean result: Grade + Confidence, or INVALID."""
     if device is None:
         return
     status = result.get("status", "")
     grade  = result.get("predicted_grade")
 
     if status == "NON_MANGO" or not grade:
-        # Not a mango — show INVALID clearly
-        lines = ["INVALID", "Not a mango"]
+        # Large INVALID, small explanation
+        _oled_render(device, driver, ["INVALID", "Not a mango"])
     else:
-        # Get confidence: prefer grade_confidence, fall back to average_model_scores
+        # Get confidence from grade_confidence or average_model_scores
         conf = result.get("grade_confidence")
         if conf is None:
             avg_scores = result.get("average_model_scores", {})
             conf = avg_scores.get(grade, 0)
         conf_pct = conf * 100
-
-        # Clean display: Grade on line 1 (large), confidence on line 2
-        lines = [
-            grade.title(),           # e.g. "Grade 1"  ← large font
-            f"Conf: {conf_pct:.1f}%",  # e.g. "Conf: 87.3%"
-        ]
-    _oled_render(device, driver, lines)
+        _oled_render(device, driver, [
+            grade.title(),           # e.g. "Grade 1"   ← large
+            f"Conf: {conf_pct:.1f}%",  # e.g. "Conf: 87.3%" ← small
+        ])
 
 
-# ── Camera helpers ────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# Camera helpers
+# ══════════════════════════════════════════════════════════════════════════════
 
 class _PiCamera:
     def __init__(self):
@@ -214,7 +335,9 @@ def _open_camera(camera_index: int):
         ) from exc
 
 
-# ── GPIO helpers ──────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# GPIO helpers
+# ══════════════════════════════════════════════════════════════════════════════
 
 def _setup_button(pin: int) -> bool:
     try:
@@ -244,7 +367,9 @@ def _cleanup_gpio():
         pass
 
 
-# ── Frame save helper ─────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# Frame save helper
+# ══════════════════════════════════════════════════════════════════════════════
 
 def _save_frame(frame, path: Path) -> None:
     import numpy as np
@@ -257,7 +382,9 @@ def _save_frame(frame, path: Path) -> None:
     print(f"[Save] {path}")
 
 
-# ── Trigger / exit helpers ────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# Trigger / exit helpers
+# ══════════════════════════════════════════════════════════════════════════════
 
 def _wait_for_trigger(gpio_ok: bool) -> None:
     if gpio_ok:
@@ -286,7 +413,9 @@ def _wait_for_exit():
         pass
 
 
-# ── Result printer ────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# Result printer
+# ══════════════════════════════════════════════════════════════════════════════
 
 def _print_result(result: dict) -> None:
     print("\n" + "=" * 60)
@@ -296,30 +425,34 @@ def _print_result(result: dict) -> None:
     grade  = result.get("predicted_grade")
 
     if status == "NON_MANGO" or not grade:
-        # Validity model confirmed it's NOT a mango
         print("  Status  : INVALID – Not a mango")
-        print("  Grade   : — (rejected by validity model)")
+        reason = result.get("rejection_reason", "")
+        if "confidence_below_threshold" in reason:
+            print(f"  Reason  : Low confidence (threshold={MIN_CONF_THRESHOLD*100:.0f}%)")
+            print("            Object is likely not a mango.")
+        else:
+            print("  Reason  : Rejected by validity model.")
     else:
-        conf   = result.get("grade_confidence", 0) * 100
-        votes  = result.get("winning_votes", "?")
-        vc     = result.get("vote_counts", {})
-        avg    = result.get("average_model_scores", {})
+        # Get confidence
+        conf = result.get("grade_confidence")
+        if conf is None:
+            avg = result.get("average_model_scores", {})
+            conf = avg.get(grade, 0)
+        conf_pct = conf * 100
+        votes = result.get("winning_votes", "?")
+        vc    = result.get("vote_counts", {})
+
         print(f"  Status     : {status}")
         print(f"  Grade      : {grade.title()}")
-        print(f"  Confidence : {conf:.1f}%")
+        print(f"  Confidence : {conf_pct:.1f}%")
         print(f"  Votes      : {votes}/4 sides agreed")
         if status == "VALIDITY_UNAVAILABLE":
-            print("  ⚠  Note    : Validity model not found — grade is based on")
-            print("               the grade model only (install validity model")
-            print("               for mango vs non-mango detection).")
+            print(f"  ⚠  Note  : Validity model not found. Confidence gate")
+            print(f"             ({MIN_CONF_THRESHOLD*100:.0f}%) was used as fallback.")
         if vc:
             print("  Vote breakdown:")
             for g, v in vc.items():
                 print(f"    {g.title():12s}: {v} vote(s)")
-        if avg:
-            print("  Avg scores (tied grades):")
-            for g, s in avg.items():
-                print(f"    {g.title():12s}: {s*100:.1f}%")
 
     sid = result.get("session_id", "")
     if sid:
@@ -327,15 +460,27 @@ def _print_result(result: dict) -> None:
     print("=" * 60 + "\n")
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# Main
+# ══════════════════════════════════════════════════════════════════════════════
 
-def run(camera_index: int = 0, use_display: bool = True, use_button: bool = True) -> None:
+def run(
+    camera_index: int = 0,
+    use_display: bool = True,
+    use_button: bool = True,
+    use_voice: bool = True,
+) -> None:
     print("\n" + "=" * 60)
     print("  MangoAI – Raspberry Pi Camera Grader")
     print("=" * 60)
 
-    # Load models
+    # ── Voice ──────────────────────────────────────────────────────────────
+    voice = _Voice() if use_voice else None
+
+    # ── Load models ────────────────────────────────────────────────────────
     print("[Model] Loading grade model...")
+    if voice:
+        voice.say("Loading model, please wait.")
     try:
         grade_model    = use_model.load_grade_model()
         validity_model = use_model.load_validity_model()
@@ -343,38 +488,60 @@ def run(camera_index: int = 0, use_display: bool = True, use_button: bool = True
         print(f"\n[ERROR] {exc}")
         raise SystemExit(2) from exc
 
-    # OLED
+    if validity_model is None:
+        print(f"[Gate] Validity model not found. "
+              f"Using confidence threshold ({MIN_CONF_THRESHOLD*100:.0f}%) "
+              f"to reject non-mangoes.")
+
+    # ── OLED ───────────────────────────────────────────────────────────────
     oled_device, oled_driver = None, None
     if use_display:
         oled_device, oled_driver = _load_oled()
-        _oled_status(oled_device, oled_driver, "Ready", "Opening camera...")
+        _oled_status(oled_device, oled_driver, "MangoAI Ready", "Opening camera...")
 
-    # Camera
+    # ── Camera ─────────────────────────────────────────────────────────────
     camera = _open_camera(camera_index)
 
-    # GPIO button
+    # ── GPIO button ────────────────────────────────────────────────────────
     gpio_ok = _setup_button(BUTTON_PIN) if use_button else False
 
-    # Session
+    # ── Session ────────────────────────────────────────────────────────────
     session_id  = uuid.uuid4().hex[:12]
     session_dir = PROJECT_ROOT / "captures" / session_id
     raw_dir     = session_dir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
     captured_paths: dict[str, Path] = {}
 
-    trig_msg = "GPIO button / Enter" if gpio_ok else "keyboard Enter"
+    trig_msg = "GPIO button or Enter" if gpio_ok else "keyboard Enter"
     print(f"\n[Session] {session_id}")
     print(f"[Info]    Capture order: Right → Left → Front → Back")
     print(f"[Info]    Press {trig_msg} to capture each side.")
     print(f"[Info]    Ctrl-C to abort.\n")
 
+    if voice:
+        voice.say_wait("Mango grader ready. Place the mango and press the button.")
+
     try:
-        for side in CAMERA_SIDES:
-            _oled_status(oled_device, oled_driver, f"Show {side.title()}", "Press button")
-            print(f"[Capture] Show the {side.upper()} side, then press {trig_msg}... ",
-                  end="", flush=True)
+        # ── 4-side capture loop ────────────────────────────────────────────
+        for i, side in enumerate(CAMERA_SIDES):
+            # OLED: prompt
+            _oled_status(oled_device, oled_driver,
+                         f"Show {side.title()} side", "Press button")
+
+            # Voice: prompt user for this side
+            if voice:
+                voice.say_wait(f"Show the {side} side and press the button.")
+
+            print(f"[Capture] Show the {side.upper()} side, "
+                  f"then press {trig_msg}... ", end="", flush=True)
+
             _wait_for_trigger(gpio_ok)
             print("capturing...")
+
+            # Voice: acknowledge click immediately
+            if voice:
+                voice.say(f"{side} side, capturing.")
+
             time.sleep(CAPTURE_DELAY)
 
             frame      = camera.capture_frame()
@@ -382,11 +549,18 @@ def run(camera_index: int = 0, use_display: bool = True, use_button: bool = True
             _save_frame(frame, photo_path)
             captured_paths[side] = photo_path
 
-            _oled_status(oled_device, oled_driver, f"{side.title()} saved", "")
-            time.sleep(0.5)
+            # OLED + voice: confirm saved
+            _oled_status(oled_device, oled_driver,
+                         f"{side.title()} saved", f"{i+1}/4 done")
+            if voice:
+                voice.say(f"{side} side saved. {4 - i - 1} remaining.")
+            time.sleep(0.4)
 
+        # ── Predict ────────────────────────────────────────────────────────
         print("\n[Predict] Running 4-view model inference...")
         _oled_status(oled_device, oled_driver, "Predicting...", "Please wait")
+        if voice:
+            voice.say_wait("All four sides captured. Predicting now, please wait.")
 
         result = use_model.predict_captured_views(
             validity_model,
@@ -394,33 +568,62 @@ def run(camera_index: int = 0, use_display: bool = True, use_button: bool = True
             [captured_paths[s] for s in CAMERA_SIDES],
         )
 
+        # Apply confidence gate if validity model was not available
+        result = _apply_confidence_gate(result)
+
+        # ── Show result ────────────────────────────────────────────────────
         _print_result(result)
         _oled_result(oled_device, oled_driver, result)
 
-        print("[Done] Result displayed on OLED. Press Enter or Ctrl-C to exit.")
+        # Voice announcement of final result
+        if voice:
+            grade = result.get("predicted_grade")
+            status = result.get("status", "")
+            if status == "NON_MANGO" or not grade:
+                voice.say_wait("Result: Invalid. This is not a mango.")
+            else:
+                conf = result.get("grade_confidence")
+                if conf is None:
+                    avg = result.get("average_model_scores", {})
+                    conf = avg.get(grade, 0)
+                conf_pct = int(conf * 100)
+                voice.say_wait(
+                    f"Result: {grade}. Confidence {conf_pct} percent."
+                )
+
+        print("[Done] Result on OLED. Press Enter or Ctrl-C to exit.")
         _wait_for_exit()
 
     except KeyboardInterrupt:
         print("\n[Aborted] Interrupted by user.")
+        if voice:
+            voice.say("Aborted.")
     finally:
         _oled_clear(oled_device, oled_driver)
         camera.release()
         _cleanup_gpio()
+        if voice:
+            voice.stop()
         print("[Cleanup] Done.")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="MangoAI – Raspberry Pi camera grader with OLED display.",
+        description="MangoAI – Raspberry Pi camera grader with OLED + voice.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--camera-index", type=int, default=0, metavar="N",
-                        help="USB camera index (default 0). Ignored if Pi Camera is found.")
+                        help="USB camera index (default 0). Ignored if Pi Camera found.")
     parser.add_argument("--no-display", action="store_true",
                         help="Skip OLED output (terminal only).")
-    parser.add_argument("--no-button",  action="store_true",
+    parser.add_argument("--no-button", action="store_true",
                         help="Skip GPIO button; use keyboard Enter only.")
+    parser.add_argument("--no-voice", action="store_true",
+                        help="Disable voice announcements.")
     args = parser.parse_args()
-    run(camera_index=args.camera_index,
+    run(
+        camera_index=args.camera_index,
         use_display=not args.no_display,
-        use_button=not args.no_button)
+        use_button=not args.no_button,
+        use_voice=not args.no_voice,
+    )
