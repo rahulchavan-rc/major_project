@@ -77,16 +77,33 @@ def _load_oled():
 
 
 def _oled_render(device, driver: str, lines: list[str]) -> None:
+    """Render lines on OLED. First line uses large font, rest use default."""
     from PIL import Image as PILImage, ImageDraw, ImageFont
     image = PILImage.new("1", (OLED_WIDTH, OLED_HEIGHT), 0)
     draw  = ImageDraw.Draw(image)
+
+    # Try to load a larger font for the main result line
     try:
-        font = ImageFont.load_default()
+        large_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
     except Exception:
-        font = None
-    line_h = 14
-    for i, line in enumerate(lines[:4]):
-        draw.text((2, i * line_h + 2), line, fill=255, font=font)
+        try:
+            large_font = ImageFont.truetype("/usr/share/fonts/truetype/freefont/FreeSansBold.ttf", 20)
+        except Exception:
+            large_font = ImageFont.load_default()
+
+    try:
+        small_font = ImageFont.load_default()
+    except Exception:
+        small_font = large_font
+
+    # Line 0 → large font, lines 1+ → small font
+    y = 2
+    for i, line in enumerate(lines):
+        font   = large_font if i == 0 else small_font
+        lh     = 22 if i == 0 else 13
+        draw.text((2, y), line, fill=255, font=font)
+        y += lh
+
     if driver == "luma":
         device.display(image)
     elif driver == "adafruit":
@@ -113,24 +130,27 @@ def _oled_status(device, driver: str, l1: str, l2: str = "") -> None:
 
 
 def _oled_result(device, driver: str, result: dict) -> None:
+    """Show clean result on OLED: Grade + confidence, or INVALID."""
     if device is None:
         return
     status = result.get("status", "")
     grade  = result.get("predicted_grade")
 
     if status == "NON_MANGO" or not grade:
-        # Validity model confirmed it's NOT a mango
-        lines = ["  MangoAI", "-" * 16, "  INVALID", "  Not a mango"]
+        # Not a mango — show INVALID clearly
+        lines = ["INVALID", "Not a mango"]
     else:
-        # Grade predicted (validity model may or may not have been available)
-        conf  = result.get("grade_confidence", 0) * 100
-        votes = result.get("winning_votes", "?")
-        note  = "No validity chk" if status == "VALIDITY_UNAVAILABLE" else "Verified"
+        # Get confidence: prefer grade_confidence, fall back to average_model_scores
+        conf = result.get("grade_confidence")
+        if conf is None:
+            avg_scores = result.get("average_model_scores", {})
+            conf = avg_scores.get(grade, 0)
+        conf_pct = conf * 100
+
+        # Clean display: Grade on line 1 (large), confidence on line 2
         lines = [
-            "  MangoAI Result",
-            "-" * 16,
-            f"  {grade.title()}",
-            f"  {conf:.1f}%  {votes}/4 votes",
+            grade.title(),           # e.g. "Grade 1"  ← large font
+            f"Conf: {conf_pct:.1f}%",  # e.g. "Conf: 87.3%"
         ]
     _oled_render(device, driver, lines)
 
