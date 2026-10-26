@@ -118,11 +118,14 @@ def _oled_result(device, driver: str, result: dict) -> None:
     status = result.get("status", "")
     grade  = result.get("predicted_grade")
 
-    if not grade or status in ("NON_MANGO", "VALIDITY_UNAVAILABLE"):
+    if status == "NON_MANGO" or not grade:
+        # Validity model confirmed it's NOT a mango
         lines = ["  MangoAI", "-" * 16, "  INVALID", "  Not a mango"]
     else:
+        # Grade predicted (validity model may or may not have been available)
         conf  = result.get("grade_confidence", 0) * 100
         votes = result.get("winning_votes", "?")
+        note  = "No validity chk" if status == "VALIDITY_UNAVAILABLE" else "Verified"
         lines = [
             "  MangoAI Result",
             "-" * 16,
@@ -272,9 +275,10 @@ def _print_result(result: dict) -> None:
     status = result.get("status", "UNKNOWN")
     grade  = result.get("predicted_grade")
 
-    if not grade or status in ("NON_MANGO", "VALIDITY_UNAVAILABLE"):
-        print("  Status  : INVALID")
-        print("  Grade   : — (not a mango / model unavailable)")
+    if status == "NON_MANGO" or not grade:
+        # Validity model confirmed it's NOT a mango
+        print("  Status  : INVALID – Not a mango")
+        print("  Grade   : — (rejected by validity model)")
     else:
         conf   = result.get("grade_confidence", 0) * 100
         votes  = result.get("winning_votes", "?")
@@ -284,6 +288,10 @@ def _print_result(result: dict) -> None:
         print(f"  Grade      : {grade.title()}")
         print(f"  Confidence : {conf:.1f}%")
         print(f"  Votes      : {votes}/4 sides agreed")
+        if status == "VALIDITY_UNAVAILABLE":
+            print("  ⚠  Note    : Validity model not found — grade is based on")
+            print("               the grade model only (install validity model")
+            print("               for mango vs non-mango detection).")
         if vc:
             print("  Vote breakdown:")
             for g, v in vc.items():
