@@ -528,19 +528,21 @@ def run(
             _oled_status(oled_device, oled_driver,
                          f"Show {side.title()} side", "Press button")
 
-            # Voice: prompt user for this side
+            # Voice: NON-BLOCKING — say the prompt then IMMEDIATELY listen
+            # for the button so pressing during speech is NOT missed.
             if voice:
-                voice.say_wait(f"Show the {side} side and press the button.")
+                voice.say(f"Show the {side} side and press the button.")
 
             print(f"[Capture] Show the {side.upper()} side, "
                   f"then press {trig_msg}... ", end="", flush=True)
 
+            # Button is listened to RIGHT NOW, even while voice is still speaking
             _wait_for_trigger(gpio_ok)
             print("capturing...")
 
-            # Voice: acknowledge click immediately
+            # Stop any in-progress voice prompt; immediately confirm capture
             if voice:
-                voice.say(f"{side} side, capturing.")
+                voice.say(f"{side} captured.")
 
             time.sleep(CAPTURE_DELAY)
 
@@ -549,11 +551,15 @@ def run(
             _save_frame(frame, photo_path)
             captured_paths[side] = photo_path
 
-            # OLED + voice: confirm saved
+            # OLED + voice: confirm saved, prompt for next
+            remaining = 4 - i - 1
             _oled_status(oled_device, oled_driver,
                          f"{side.title()} saved", f"{i+1}/4 done")
             if voice:
-                voice.say(f"{side} side saved. {4 - i - 1} remaining.")
+                if remaining > 0:
+                    next_side = CAMERA_SIDES[i + 1]
+                    voice.say(f"{side} done. Now show the {next_side} side.")
+                # last side: stay quiet; prediction announcement follows
             time.sleep(0.4)
 
         # ── Predict ────────────────────────────────────────────────────────
