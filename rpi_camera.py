@@ -296,14 +296,7 @@ class _PiCamera:
         print("[Camera] Raspberry Pi Camera Module (picamera2) ready.")
 
     def capture_frame(self):
-        """Trigger AF, wait for it to converge, then capture a sharp still frame."""
-        # Trigger auto-focus if the camera supports it (V2/V3 module, ignored on V1)
-        try:
-            from picamera2 import controls as pico_controls
-            self._cam.set_controls({"AfMode": pico_controls.AfModeEnum.Auto, "AfTrigger": 0})
-            time.sleep(0.4)  # brief wait for AF cycle
-        except Exception:
-            pass  # V1 camera or AF not available — continue without AF
+        """Capture a still frame. OV5647 (Pi Cam V1) is fixed-focus — no AF needed."""
         return self._cam.capture_array("main")
 
     def release(self):
