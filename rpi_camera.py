@@ -55,7 +55,7 @@ CAMERA_SIDES = ("right", "left", "front", "back")
 OLED_WIDTH   = 128
 OLED_HEIGHT  = 64
 BUTTON_PIN   = 17
-CAPTURE_DELAY = 0.05  # seconds between button release and shutter — minimal, just stabilises frame
+CAPTURE_DELAY = 0.3   # seconds between button release and shutter — allow frame to stabilise
 
 # ── If the validity model is absent, any side whose grade-model confidence
 #    is below this threshold causes the whole result to be marked INVALID.
@@ -282,16 +282,28 @@ class _PiCamera:
     def __init__(self):
         from picamera2 import Picamera2
         self._cam = Picamera2()
-        # 1280×720 is sufficient for MobileNetV3 (224×224 input) and captures faster
+        # Use full 1920×1080 to match the sensor's native format and maximise detail.
+        # MobileNetV3 resizes to 224×224 — starting from a higher-res image is better.
         cfg = self._cam.create_still_configuration(
-            main={"size": (1280, 720), "format": "RGB888"},
+            main={"size": (1920, 1080), "format": "RGB888"},
+            buffer_count=2,
         )
         self._cam.configure(cfg)
         self._cam.start()
-        time.sleep(1.0)  # shorter warm-up; 1 s is enough for AE/AWB to settle
+        # Wait 3 s for Auto-Exposure, Auto-White-Balance and Auto-Focus to fully settle.
+        # 1 s is often insufficient — blurry / dark captures cause wrong predictions.
+        time.sleep(3.0)
         print("[Camera] Raspberry Pi Camera Module (picamera2) ready.")
 
     def capture_frame(self):
+        """Trigger AF, wait for it to converge, then capture a sharp still frame."""
+        # Trigger auto-focus if the camera supports it (V2/V3 module, ignored on V1)
+        try:
+            from picamera2 import controls as pico_controls
+            self._cam.set_controls({"AfMode": pico_controls.AfModeEnum.Auto, "AfTrigger": 0})
+            time.sleep(0.4)  # brief wait for AF cycle
+        except Exception:
+            pass  # V1 camera or AF not available — continue without AF
         return self._cam.capture_array("main")
 
     def release(self):
@@ -371,6 +383,28 @@ def _cleanup_gpio():
 # ══════════════════════════════════════════════════════════════════════════════
 # Frame save helper
 # ══════════════════════════════════════════════════════════════════════════════
+
+# Minimum Laplacian variance for a frame to be considered "sharp enough".
+# Blurry images have low variance. Tune this if your lighting is very dim.
+BLUR_THRESHOLD = 80.0
+# Maximum retries if a captured frame is too blurry
+MAX_CAPTURE_RETRIES = 3
+
+
+def _laplacian_variance(frame_rgb) -> float:
+    """Return Laplacian variance of a grayscale frame (higher = sharper)."""
+    import numpy as np
+    gray = np.mean(frame_rgb, axis=2)          # quick RGB → gray approximation
+    # Laplacian kernel applied via simple 2-D difference
+    lap = (
+        -4 * gray[1:-1, 1:-1]
+        + gray[0:-2, 1:-1]
+        + gray[2:,   1:-1]
+        + gray[1:-1, 0:-2]
+        + gray[1:-1, 2:]
+    )
+    return float(np.var(lap))
+
 
 def _save_frame(frame, path: Path) -> None:
     import numpy as np
@@ -517,7 +551,9 @@ def run(
     print(f"\n[Session] {session_id}")
     print(f"[Info]    Capture order: Right → Left → Front → Back")
     print(f"[Info]    Press {trig_msg} to capture each side.")
-    print(f"[Info]    Ctrl-C to abort.\n")
+    print(f"[Info]    Ctrl-C to abort.")
+    print(f"[Tip]     Ensure GOOD, UNIFORM LIGHTING on the mango.")
+    print(f"[Tip]     Use a plain, uncluttered background for best accuracy.\n")
 
     if voice:
         voice.say_wait("Mango grader ready. Place the mango and press the button.")
@@ -545,9 +581,28 @@ def run(
             # Button is listened to RIGHT NOW, even while voice is still speaking
             _wait_for_trigger(gpio_ok)
 
-            # ── Capture the frame IMMEDIATELY — minimal settle delay ───────
-            time.sleep(CAPTURE_DELAY)
-            frame      = camera.capture_frame()   # ← instant grab
+            # ── Capture with blur/sharpness check — retry if too blurry ───
+            frame = None
+            for attempt in range(1, MAX_CAPTURE_RETRIES + 1):
+                time.sleep(CAPTURE_DELAY)
+                candidate = camera.capture_frame()
+                blur_score = _laplacian_variance(candidate)
+                print(f"(blur score={blur_score:.1f}, threshold={BLUR_THRESHOLD})", end=" ")
+                if blur_score >= BLUR_THRESHOLD:
+                    frame = candidate
+                    break
+                # Frame is too blurry — warn and retry
+                if attempt < MAX_CAPTURE_RETRIES:
+                    print(f"[Warn] Blurry frame (attempt {attempt}/{MAX_CAPTURE_RETRIES}), retrying...")
+                    _oled_status(oled_device, oled_driver,
+                                 "Hold still!", f"Retrying {attempt}/{MAX_CAPTURE_RETRIES}")
+                    if voice:
+                        voice.say("Hold still, retrying.")
+                    time.sleep(0.5)
+                else:
+                    print(f"[Warn] Still blurry after {MAX_CAPTURE_RETRIES} attempts — using best frame.")
+                    frame = candidate  # use it anyway; blurry beats missing
+
             photo_path = raw_dir / f"{side}.jpg"
             captured_paths[side] = photo_path
             print("captured!")
@@ -559,7 +614,7 @@ def run(
             # Save this frame in the background while user turns the mango
             _pending_save = _save_executor.submit(_save_frame, frame, photo_path)
 
-            # Immediate audio/OLED feedback — no sleep
+            # Immediate audio/OLED feedback
             if voice:
                 voice.say(f"{side} captured.")
             remaining = 4 - i - 1
@@ -588,6 +643,20 @@ def run(
 
         # Apply confidence gate if validity model was not available
         result = _apply_confidence_gate(result)
+
+        # ── Per-side debug output ──────────────────────────────────────────
+        per_side = result.get("per_side", {})
+        if per_side:
+            print("[Debug]   Per-side predictions:")
+            for s in CAMERA_SIDES:
+                info = per_side.get(s, {})
+                g  = (info.get("predicted_grade") or "?").title()
+                c  = (info.get("grade_confidence") or 0) * 100
+                cs = info.get("class_scores", {})
+                scores_str = "  ".join(
+                    f"{k.replace('grade ', 'G')}:{v*100:.0f}%" for k, v in cs.items()
+                )
+                print(f"           {s:5s} → {g} ({c:.1f}%)   [{scores_str}]")
 
         # ── Show result ────────────────────────────────────────────────────
         _print_result(result)
