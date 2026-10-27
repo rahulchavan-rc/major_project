@@ -399,7 +399,48 @@
     .submit-btn .btn-spinner { display: none; }
     .submit-btn.loading .btn-text { display: none; }
     .submit-btn.loading .btn-spinner { display: inline; }
-    .submit-btn.loading { pointer-events: none; }
+    .submit-btn.loading { pointer-events: none; opacity: 0.85; }
+
+    /* ── Progress bar (shown while analysing) ──────────────── */
+    .progress-wrap {
+      display: none;
+      margin-top: 12px;
+      height: 4px;
+      background: rgba(255,255,255,0.07);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .progress-wrap.active { display: block; }
+    .progress-bar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--neon2), var(--neon), var(--amber));
+      background-size: 200% 100%;
+      border-radius: 4px;
+      animation: progressFill 2.5s ease-in-out forwards, shimmer 1.5s linear infinite;
+    }
+    @keyframes progressFill {
+      0%   { width: 0%; }
+      40%  { width: 65%; }
+      80%  { width: 88%; }
+      100% { width: 95%; }
+    }
+    @keyframes shimmer {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    .progress-label {
+      text-align: center;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      margin-top: 8px;
+      display: none;
+    }
+    .progress-label.active { display: block; }
+    .progress-label span {
+      color: var(--neon);
+      font-weight: 600;
+    }
 
     /* ── Error message ─────────────────────────────────────── */
     .error-msg {
@@ -708,8 +749,12 @@
 
           <button type="submit" class="submit-btn" id="submit-btn">
             <span class="btn-text">&#128269;&nbsp; Detect Grade</span>
-            <span class="btn-spinner">&#9203;&nbsp; Analysing&hellip;</span>
+            <span class="btn-spinner">&#9203;&nbsp; Analysing image&hellip;</span>
           </button>
+          <div class="progress-wrap" id="progress-wrap">
+            <div class="progress-bar" id="progress-bar"></div>
+          </div>
+          <div class="progress-label" id="progress-label">Running <span>MobileNetV3</span> inference&hellip;</div>
         </form>
       </section>
 
@@ -878,7 +923,17 @@
     });
 
     /* ── Submit loading state ─────────────────────────────── */
-    form.addEventListener('submit', () => { submitBtn.classList.add('loading'); });
+    const progressWrap  = document.getElementById('progress-wrap');
+    const progressLabel = document.getElementById('progress-label');
+
+    form.addEventListener('submit', (e) => {
+      // Prevent double submission
+      if (submitBtn.classList.contains('loading')) { e.preventDefault(); return; }
+      if (!input.files.length) return;   // let HTML5 validation handle empty
+      submitBtn.classList.add('loading');
+      progressWrap.classList.add('active');
+      progressLabel.classList.add('active');
+    });
 
     /* ── Animate score bars on page load ──────────────────── */
     function animateScoreBars() {

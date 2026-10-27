@@ -23,13 +23,14 @@ _model_lock = threading.Lock()
 _loaded_models: tuple[object | None, object, list[str], list[str] | None] | None = None
 
 
-def _get_models() -> tuple[object | None, object, list[str], list[str] | None]:
+def _load_models_now():
+    """Load all models and cache them. Safe to call from any thread."""
     global _loaded_models
     if _loaded_models is None:
         with _model_lock:
             if _loaded_models is None:
-                grade_model = use_model.load_grade_model()
-                class_names = use_model.load_class_names()
+                grade_model    = use_model.load_grade_model()
+                class_names    = use_model.load_class_names()
                 validity_model = use_model.load_validity_model()
                 validity_names = (
                     use_model.load_validity_class_names()
@@ -42,7 +43,16 @@ def _get_models() -> tuple[object | None, object, list[str], list[str] | None]:
                     class_names,
                     validity_names,
                 )
+
+
+def _get_models() -> tuple[object | None, object, list[str], list[str] | None]:
+    _load_models_now()
     return _loaded_models
+
+
+# ── Pre-load models in the background so the first HTTP request is instant ───
+_preload_thread = threading.Thread(target=_load_models_now, daemon=True, name="model-preload")
+_preload_thread.start()
 
 
 def _render(message: str | None = None, result: dict | None = None, status: int = 200):
@@ -69,10 +79,11 @@ def predict():
     if len(image_data) > MAX_UPLOAD_BYTES:
         return _render("That image is too large. Choose an image up to 50 MB.", status=413)
 
+    # Open once, validate, check pixel count, then save — no double open.
     try:
-        with Image.open(BytesIO(image_data)) as image:
-            width, height = image.size
-            image.verify()
+        image = Image.open(BytesIO(image_data))
+        image.load()                         # decode now; catches corrupt files
+        width, height = image.size
     except (Image.DecompressionBombError, UnidentifiedImageError, OSError, ValueError):
         return _render("The selected file is not a readable image.", status=400)
 
@@ -82,8 +93,8 @@ def predict():
     try:
         with tempfile.TemporaryDirectory(prefix="mango-grade-") as temporary_directory:
             image_path = Path(temporary_directory) / "upload.png"
-            with Image.open(BytesIO(image_data)) as image:
-                image.convert("RGB").save(image_path, format="PNG")
+            image.convert("RGB").save(image_path, format="PNG")
+            image.close()
             validity_model, grade_model, class_names, validity_names = _get_models()
             result = use_model.predict_single_image(
                 validity_model,
