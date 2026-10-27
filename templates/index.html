@@ -755,7 +755,7 @@
 
       <!-- Result card (conditionally rendered) -->
       {% if result %}
-        {% if result.status == "NON_MANGO" or result.status == "VALIDITY_UNAVAILABLE" %}
+        {% if result.status == "NON_MANGO" %}
         <section class="card result-card result-card--invalid" aria-live="polite" aria-label="Prediction result">
           <div class="result-header">
             <div>
@@ -767,7 +767,7 @@
           </div>
         </section>
 
-        {% elif result.predicted_grade and result.status == "GRADED" %}
+        {% elif result.predicted_grade and result.status in ("GRADED", "VALIDITY_UNAVAILABLE") %}
         <section class="card result-card" aria-live="polite" aria-label="Prediction result">
           <div class="result-header">
             <div class="result-grade-wrap">
@@ -775,8 +775,19 @@
               <div class="result-grade">{{ result.predicted_grade|title }}</div>
               <div class="result-meta">Top confidence: {{ "%.1f"|format(result.grade_confidence * 100) }}%</div>
             </div>
+            {% if result.status == "GRADED" %}
             <span class="result-status-badge status-valid"><span class="status-dot"></span>Mango Verified</span>
+            {% else %}
+            <span class="result-status-badge status-warn"><span class="status-dot"></span>No Validity Check</span>
+            {% endif %}
           </div>
+
+          {% if result.status == "VALIDITY_UNAVAILABLE" %}
+          <div class="notice-box" style="margin-bottom:18px;">
+            <span class="notice-icon">&#9888;&#65039;</span>
+            Mango validation model not found. Grade is shown, but the image was not verified as a mango.
+          </div>
+          {% endif %}
 
           <div class="card-title" style="margin-bottom:14px;">&#128202;&nbsp; All Grade Scores</div>
           <div class="scores-grid" id="scores-grid">
