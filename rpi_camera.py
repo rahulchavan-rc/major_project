@@ -55,7 +55,7 @@ CAMERA_SIDES = ("right", "left", "front", "back")
 OLED_WIDTH   = 128
 OLED_HEIGHT  = 64
 BUTTON_PIN   = 17
-CAPTURE_DELAY = 0.25
+CAPTURE_DELAY = 0.05  # seconds between button release and shutter — minimal, just stabilises frame
 
 # ── If the validity model is absent, any side whose grade-model confidence
 #    is below this threshold causes the whole result to be marked INVALID.
@@ -282,12 +282,13 @@ class _PiCamera:
     def __init__(self):
         from picamera2 import Picamera2
         self._cam = Picamera2()
+        # 1280×720 is sufficient for MobileNetV3 (224×224 input) and captures faster
         cfg = self._cam.create_still_configuration(
-            main={"size": (1920, 1080), "format": "RGB888"},
+            main={"size": (1280, 720), "format": "RGB888"},
         )
         self._cam.configure(cfg)
         self._cam.start()
-        time.sleep(1.5)
+        time.sleep(1.0)  # shorter warm-up; 1 s is enough for AE/AWB to settle
         print("[Camera] Raspberry Pi Camera Module (picamera2) ready.")
 
     def capture_frame(self):
@@ -521,8 +522,13 @@ def run(
     if voice:
         voice.say_wait("Mango grader ready. Place the mango and press the button.")
 
+    # Background save executor — saves JPEG while user prepares next side
+    _save_executor = __import__('concurrent.futures', fromlist=['ThreadPoolExecutor']).ThreadPoolExecutor(max_workers=1)
+
     try:
         # ── 4-side capture loop ────────────────────────────────────────────
+        _pending_save = None  # Future for background save of previous frame
+
         for i, side in enumerate(CAMERA_SIDES):
             # OLED: prompt
             _oled_status(oled_device, oled_driver,
@@ -538,29 +544,35 @@ def run(
 
             # Button is listened to RIGHT NOW, even while voice is still speaking
             _wait_for_trigger(gpio_ok)
-            print("capturing...")
 
-            # Stop any in-progress voice prompt; immediately confirm capture
+            # ── Capture the frame IMMEDIATELY — minimal settle delay ───────
+            time.sleep(CAPTURE_DELAY)
+            frame      = camera.capture_frame()   # ← instant grab
+            photo_path = raw_dir / f"{side}.jpg"
+            captured_paths[side] = photo_path
+            print("captured!")
+
+            # Wait for previous frame's save to finish (should be done already)
+            if _pending_save is not None:
+                _pending_save.result()
+
+            # Save this frame in the background while user turns the mango
+            _pending_save = _save_executor.submit(_save_frame, frame, photo_path)
+
+            # Immediate audio/OLED feedback — no sleep
             if voice:
                 voice.say(f"{side} captured.")
-
-            time.sleep(CAPTURE_DELAY)
-
-            frame      = camera.capture_frame()
-            photo_path = raw_dir / f"{side}.jpg"
-            _save_frame(frame, photo_path)
-            captured_paths[side] = photo_path
-
-            # OLED + voice: confirm saved, prompt for next
             remaining = 4 - i - 1
             _oled_status(oled_device, oled_driver,
-                         f"{side.title()} saved", f"{i+1}/4 done")
-            if voice:
-                if remaining > 0:
-                    next_side = CAMERA_SIDES[i + 1]
-                    voice.say(f"{side} done. Now show the {next_side} side.")
-                # last side: stay quiet; prediction announcement follows
-            time.sleep(0.4)
+                         f"{side.title()} done", f"{i+1}/4 captured")
+            if voice and remaining > 0:
+                next_side = CAMERA_SIDES[i + 1]
+                voice.say(f"Now show the {next_side} side.")
+
+        # ── Ensure final frame is saved before inference ──────────────────
+        if _pending_save is not None:
+            _pending_save.result()
+        _save_executor.shutdown(wait=False)
 
         # ── Predict ────────────────────────────────────────────────────────
         print("\n[Predict] Running 4-view model inference...")
