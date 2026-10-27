@@ -282,16 +282,14 @@ class _PiCamera:
     def __init__(self):
         from picamera2 import Picamera2
         self._cam = Picamera2()
-        # Use full 1920×1080 to match the sensor's native format and maximise detail.
-        # MobileNetV3 resizes to 224×224 — starting from a higher-res image is better.
+        # 1280×720: ISP downscales from sensor-native 1920×1080 — good quality,
+        # faster capture_array than requesting the full 1920×1080 buffer.
         cfg = self._cam.create_still_configuration(
-            main={"size": (1920, 1080), "format": "RGB888"},
-            buffer_count=2,
+            main={"size": (1280, 720), "format": "RGB888"},
         )
         self._cam.configure(cfg)
         self._cam.start()
-        # Wait 3 s for Auto-Exposure, Auto-White-Balance and Auto-Focus to fully settle.
-        # 1 s is often insufficient — blurry / dark captures cause wrong predictions.
+        # Wait 3 s for AE/AWB to fully settle (blurry/dark frames → wrong grades).
         time.sleep(3.0)
         print("[Camera] Raspberry Pi Camera Module (picamera2) ready.")
 
@@ -573,6 +571,10 @@ def run(
 
             # Button is listened to RIGHT NOW, even while voice is still speaking
             _wait_for_trigger(gpio_ok)
+
+            # Immediate feedback — user knows button press was registered
+            print("capturing...", end=" ", flush=True)
+            _oled_status(oled_device, oled_driver, "Capturing...", f"{side.title()} side")
 
             # ── Capture with blur/sharpness check — retry if too blurry ───
             frame = None
