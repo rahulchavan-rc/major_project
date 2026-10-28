@@ -55,7 +55,7 @@ CAMERA_SIDES = ("right", "left", "front", "back")
 OLED_WIDTH   = 128
 OLED_HEIGHT  = 64
 BUTTON_PIN   = 17
-CAPTURE_DELAY = 0.3   # seconds between button release and shutter — allow frame to stabilise
+CAPTURE_DELAY = 0.15  # seconds between button release and shutter — allow frame to stabilise
 
 # ── If the validity model is absent, any side whose grade-model confidence
 #    is below this threshold causes the whole result to be marked INVALID.
@@ -282,9 +282,11 @@ class _PiCamera:
     def __init__(self):
         from picamera2 import Picamera2
         self._cam = Picamera2()
-        # 1280×720: ISP downscales from sensor-native 1920×1080 — good quality,
-        # faster capture_array than requesting the full 1920×1080 buffer.
-        cfg = self._cam.create_still_configuration(
+        # Use VIDEO configuration so the sensor streams continuously.
+        # create_still_configuration can block indefinitely on OV5647 because
+        # it waits for a full still-capture cycle. Video mode keeps the sensor
+        # running so capture_array() just grabs the latest ready frame instantly.
+        cfg = self._cam.create_video_configuration(
             main={"size": (1280, 720), "format": "RGB888"},
         )
         self._cam.configure(cfg)
@@ -294,7 +296,7 @@ class _PiCamera:
         print("[Camera] Raspberry Pi Camera Module (picamera2) ready.")
 
     def capture_frame(self):
-        """Capture a still frame. OV5647 (Pi Cam V1) is fixed-focus — no AF needed."""
+        """Grab the latest streamed frame — instant, never blocks."""
         return self._cam.capture_array("main")
 
     def release(self):
@@ -554,7 +556,7 @@ def run(
 
     try:
         # ── 4-side capture loop ────────────────────────────────────────────
-        _pending_save = None  # Future for background save of previous frame
+        _pending_saves = []  # Save frames while the next side is being prepared
 
         for i, side in enumerate(CAMERA_SIDES):
             # OLED: prompt
@@ -602,12 +604,10 @@ def run(
             captured_paths[side] = photo_path
             print("captured!")
 
-            # Wait for previous frame's save to finish (should be done already)
-            if _pending_save is not None:
-                _pending_save.result()
-
             # Save this frame in the background while user turns the mango
-            _pending_save = _save_executor.submit(_save_frame, frame, photo_path)
+            _pending_saves.append(
+                _save_executor.submit(_save_frame, frame, photo_path)
+            )
 
             # Immediate audio/OLED feedback
             if voice:
@@ -620,8 +620,8 @@ def run(
                 voice.say(f"Now show the {next_side} side.")
 
         # ── Ensure final frame is saved before inference ──────────────────
-        if _pending_save is not None:
-            _pending_save.result()
+        for save_future in _pending_saves:
+            save_future.result()
         _save_executor.shutdown(wait=False)
 
         # ── Predict ────────────────────────────────────────────────────────
