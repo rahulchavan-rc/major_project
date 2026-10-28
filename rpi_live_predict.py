@@ -93,6 +93,7 @@ OLED_HEIGHT          = 64
 BUTTON_PIN           = 17
 DOUBLE_PRESS_WINDOW  = 0.6    # seconds — max gap for a double-press
 LONG_PRESS_THRESHOLD = 1.0    # seconds — hold time for long-press
+RESULT_DISPLAY_SECONDS = 3.0
 
 # ── OpenCV colours (BGR) ──────────────────────────────────────────────────────
 CLR_RED    = (60,  60,  240)
@@ -920,6 +921,7 @@ def run(
     print("=" * 62)
     print(f"  K-nearest   : {k}")
     print(f"  Predict every {every} frames")
+    print(f"  Result hold : {RESULT_DISPLAY_SECONDS:g} seconds")
     print(f"  Voice       : {'ON' if use_voice else 'OFF'}")
     print(f"  OLED        : {'ON' if oled_device else 'OFF / not found'}")
     print(f"  GPIO button : {'ON  (GPIO ' + str(BUTTON_PIN) + ')' if gpio_ok else 'OFF'}")
@@ -943,6 +945,7 @@ def run(
     frame_num   = 0
     fps         = 0.0
     t_prev      = time.time()
+    next_prediction_at = 0.0
     last_label  = ""
     last_tier   = ""
 
@@ -960,9 +963,11 @@ def run(
             t_prev = t_now
 
             # ── KNN prediction every N frames ──────────────────────────────
-            if not frozen and frame_num % every == 0:
+            if (not frozen and frame_num % every == 0
+                    and t_now >= next_prediction_at):
                 feats = extract_features(extractor, frame_rgb)
                 label, confidence, top_k = knn_predict(feats, db_features, db_labels, k=k)
+                next_prediction_at = time.time() + RESULT_DISPLAY_SECONDS
                 tier  = _confidence_tier(confidence)
 
                 # Voice: announce on grade or tier change (same as live_predict.py)
