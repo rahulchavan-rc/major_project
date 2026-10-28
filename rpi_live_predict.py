@@ -16,9 +16,9 @@ the OpenCV preview window.
 
 VOICE COMMANDS (GPIO button, GPIO 17)
 ──────────────────────────────────────
-  Short press  (<1 s)          : Announce current grade aloud
+    Short press  (<1 s)          : Save current frame and announce its prediction
   Long  press  (≥1 s)          : Freeze / unfreeze prediction updates
-  Double press (≤0.6 s gap)    : Save current frame to disk
+    Double press (≤0.6 s gap)    : Save current frame to disk
 
 KEYBOARD CONTROLS (OpenCV window)
 ───────────────────────────────────
@@ -768,7 +768,7 @@ def _draw_overlay(
 
     kb_line = "Q=quit  S=save  SPACE=freeze  +/-=speed  V=voice  A=announce  F=info"
     if gpio_ok:
-        kb_line = "BTN:short=announce long=freeze dbl=save  |  " + kb_line
+        kb_line = "BTN:short=save+announce long=freeze dbl=save  |  " + kb_line
     cv2.putText(frame, kb_line,
                 (8, h - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.28, CLR_YELLOW, 1, cv2.LINE_AA)
 
@@ -931,7 +931,7 @@ def run(
     print(f"  OLED        : {'ON' if oled_device else 'OFF / not found'}")
     print(f"  GPIO button : {'ON  (GPIO ' + str(BUTTON_PIN) + ')' if gpio_ok else 'OFF'}")
     if gpio_ok:
-        print(f"  BTN cmds    : short=announce  long=freeze  double=save")
+        print(f"  BTN cmds    : short=save+announce  long=freeze  double=save")
     print(f"  Keyboard    : Q=quit  SPACE=freeze  S=save  +/-=speed  V=voice  A=announce")
     print("=" * 62 + "\n")
 
@@ -995,16 +995,19 @@ def run(
             # ── GPIO button event handling ─────────────────────────────────
             if btn_mon is not None:
                 ev = btn_mon.get_event()
-                if ev == "short":
-                    # Announce current prediction
-                    if label not in ("Initialising...", ""):
-                        msg = _build_speech_message(label, confidence)
-                        announce = f"Current prediction: {msg}"
-                        print(f"[BTN] {announce}")
-                        if voice_on and voice is not None:
-                            voice.say(announce)
+                if ev in ("short", "double"):
+                    # A single click must visibly save a frame in headless mode too.
+                    fname = CAPTURES_DIR / f"{uuid.uuid4().hex[:8]}_{label.replace(' ','_')}.jpg"
+                    _save_frame_rgb(frame_rgb, fname, cv2)
+                    print(f"[BTN] Saved → {fname.name}")
+                    if ev == "short" and label not in ("Initialising...", ""):
+                        message = f"Frame saved. {_build_speech_message(label, confidence)}"
                     else:
-                        print("[BTN] Prediction not ready yet.")
+                        message = "Frame saved. Prediction not ready yet." if label in (
+                            "Initialising...", ""
+                        ) else "Frame saved."
+                    if voice_on and voice is not None:
+                        voice.say(message)
 
                 elif ev == "long":
                     # Freeze / unfreeze
@@ -1014,14 +1017,6 @@ def run(
                     if voice_on and voice is not None:
                         voice.say(st)
                     _oled_live(oled_device, oled_driver, label, confidence, top_k, frozen)
-
-                elif ev == "double":
-                    # Save current frame
-                    fname = CAPTURES_DIR / f"{uuid.uuid4().hex[:8]}_{label.replace(' ','_')}.jpg"
-                    _save_frame_rgb(frame_rgb, fname, cv2)
-                    print(f"[BTN] Saved → {fname.name}")
-                    if voice_on and voice is not None:
-                        voice.say("Frame saved.")
 
             # ── OpenCV window & keyboard ───────────────────────────────────
             if cv2 is not None:
@@ -1100,7 +1095,7 @@ if __name__ == "__main__":
             "Results are shown on the SSD1306 OLED, spoken via espeak-ng, and\n"
             "displayed in an OpenCV window with the same layout as live_predict.py.\n\n"
             "GPIO Button commands (GPIO 17, active-low pull-up):\n"
-            "  Short press  (<1 s)       : Announce current grade prediction\n"
+            "  Short press  (<1 s)       : Save current frame and announce prediction\n"
             "  Long  press  (>=1 s)      : Freeze / unfreeze prediction updates\n"
             "  Double press (<=0.6 s gap): Save current frame to disk\n\n"
             "Keyboard shortcuts (OpenCV window):\n"
