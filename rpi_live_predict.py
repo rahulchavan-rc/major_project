@@ -625,12 +625,15 @@ def build_feature_extractor():
 
 
 def extract_features(model, frame_rgb: np.ndarray) -> np.ndarray:
-    """Resize to 224×224, extract CNN features, L2-normalise."""
+    """Resize to 224×224, supply all model inputs, and L2-normalise features."""
     import tensorflow as tf
+    import use_model
+
     img   = tf.image.resize(tf.constant(frame_rgb, dtype=tf.float32),
                             [224, 224], method="bilinear")
     img   = tf.expand_dims(img, 0)
-    feats = model(img, training=False).numpy()[0]
+    model_inputs = use_model.grade_model_inputs(model, img)
+    feats = model(model_inputs, training=False).numpy()[0]
     norm  = np.linalg.norm(feats)
     return feats / norm if norm > 0 else feats
 

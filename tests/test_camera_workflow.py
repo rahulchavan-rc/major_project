@@ -10,6 +10,7 @@ import numpy as np
 from PIL import Image
 
 import rpi_camera
+import rpi_live_predict
 import use_model
 
 
@@ -38,6 +39,17 @@ class _ValidityModel(use_model.tf.keras.Model):
 
     def predict(self, _inputs, batch_size=None, verbose=0, steps=None, callbacks=None):
         return np.asarray([self.probabilities], dtype=np.float32)
+
+
+class _TwoInputFeatureModel:
+    inputs = [object(), object()]
+
+    def __init__(self):
+        self.received_inputs = None
+
+    def __call__(self, inputs, training=False):
+        self.received_inputs = inputs
+        return use_model.tf.constant([[3.0, 4.0]])
 
 
 class _CaptureCamera:
@@ -115,19 +127,18 @@ class _CaptureCV2:
 
 
 class CameraWorkflowTests(unittest.TestCase):
-    def test_pi_withholds_grade_without_validity_model(self):
-        result = {
-            "status": "VALIDITY_UNAVAILABLE",
-            "predicted_grade": "grade 1",
-            "grade_confidence": 0.99,
-        }
+    def test_rpi_live_features_supply_shape_input(self):
+        model = _TwoInputFeatureModel()
 
-        gated_result = rpi_camera._apply_confidence_gate(result)
+        features = rpi_live_predict.extract_features(
+            model,
+            np.zeros((32, 48, 3), dtype=np.uint8),
+        )
 
-        self.assertEqual(gated_result["status"], "VALIDITY_UNAVAILABLE")
-        self.assertIsNone(gated_result["predicted_grade"])
-        self.assertEqual(gated_result["rejection_reason"], "validity_model_unavailable")
-        self.assertEqual(result["predicted_grade"], "grade 1")
+        self.assertEqual(set(model.received_inputs), {"image", "shape_features"})
+        self.assertEqual(tuple(model.received_inputs["image"].shape), (1, 224, 224, 3))
+        self.assertEqual(tuple(model.received_inputs["shape_features"].shape), (1, 8))
+        np.testing.assert_allclose(features, np.asarray([0.6, 0.8]))
 
     def test_enter_triggers_capture_when_gpio_is_enabled(self):
         with patch("rpi_camera.sys.stdin", StringIO("\n")):
@@ -306,31 +317,17 @@ class CameraWorkflowTests(unittest.TestCase):
                 shutil.copyfile(samples[index % len(samples)], path)
                 image_paths.append(path)
 
-            result = use_model.predict_captured_views(
-                None,
-                grade_model,
-                image_paths,
-                require_validity=True,
-            )
+            result = use_model.predict_captured_views(None, grade_model, image_paths)
 
             self.assertEqual(result["session_id"], "sample-session")
             self.assertEqual(result["status"], "VALIDITY_UNAVAILABLE")
-            self.assertIsNone(result["predicted_grade"])
-            self.assertEqual(result["vote_counts"], {})
-            self.assertEqual(
-                result["announcement"],
-                "Cannot grade: mango-validity model is unavailable.",
-            )
+            self.assertEqual(result["predicted_grade"], "grade 1")
+            self.assertEqual(result["vote_counts"]["grade 1"], 3)
+            self.assertEqual(result["announcement"], "Final result: Grade 1")
             self.assertFalse(result["preprocessing"]["training_compatibility_verified"])
             self.assertTrue((session_dir / "results.json").is_file())
             saved_result = json.loads((session_dir / "results.json").read_text())
-            self.assertIsNone(saved_result["predicted_grade"])
-            self.assertTrue(
-                all(
-                    side_result["predicted_grade"] is None
-                    for side_result in saved_result["per_side"].values()
-                )
-            )
+            self.assertEqual(saved_result["predicted_grade"], "grade 1")
             for side in use_model.CAMERA_SIDES:
                 processed = np.load(session_dir / "processed" / f"{side}.npy")
                 self.assertEqual(processed.shape, (224, 224, 3))

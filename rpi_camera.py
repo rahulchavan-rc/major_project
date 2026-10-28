@@ -11,8 +11,8 @@ using the trained model and shows the final result on a 1.3-inch
 SSD1306 OLED display (128×64, I2C).
 
 Validation behavior:
-    A grade is reported only when a mango-validity model is available. If it is
-    missing, the Pi workflow withholds the grade rather than guessing.
+    Without a mango-validity model, the grade model's result is shown as
+    unvalidated. An available validity model can reject non-mango objects.
 
 Hardware wiring (Raspberry Pi GPIO):
   OLED (SSD1306, I2C):
@@ -124,24 +124,6 @@ class _Voice:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Non-mango fallback (confidence threshold)
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _apply_confidence_gate(result: dict) -> dict:
-    """
-    Do not report a grade when the object-validity model is unavailable.
-    """
-    if result.get("status") != "VALIDITY_UNAVAILABLE":
-        return result
-
-    result = dict(result)
-    result["predicted_grade"] = None
-    result["status"] = "VALIDITY_UNAVAILABLE"
-    result["rejection_reason"] = "validity_model_unavailable"
-    return result
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 # OLED helpers
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -234,11 +216,11 @@ def _oled_result(device, driver: str, result: dict) -> None:
     status = result.get("status", "")
     grade  = result.get("predicted_grade")
 
-    if status == "VALIDITY_UNAVAILABLE":
-        _oled_render(device, driver, ["NO GRADE", "Detector unavailable"])
-    elif status == "NON_MANGO" or not grade:
+    if status == "NON_MANGO":
         # Large INVALID, small explanation
         _oled_render(device, driver, ["INVALID", "Not a mango"])
+    elif not grade:
+        _oled_render(device, driver, ["NO GRADE", "Prediction unavailable"])
     else:
         # Get confidence from grade_confidence or average_model_scores
         conf = result.get("grade_confidence")
@@ -246,10 +228,8 @@ def _oled_result(device, driver: str, result: dict) -> None:
             avg_scores = result.get("average_model_scores", {})
             conf = avg_scores.get(grade, 0)
         conf_pct = conf * 100
-        _oled_render(device, driver, [
-            grade.title(),           # e.g. "Grade 1"   ← large
-            f"Conf: {conf_pct:.1f}%",  # e.g. "Conf: 87.3%" ← small
-        ])
+        detail = "Unvalidated" if status == "VALIDITY_UNAVAILABLE" else f"Conf: {conf_pct:.1f}%"
+        _oled_render(device, driver, [grade.title(), detail])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -457,13 +437,12 @@ def _print_result(result: dict) -> None:
     status = result.get("status", "UNKNOWN")
     grade  = result.get("predicted_grade")
 
-    if status == "VALIDITY_UNAVAILABLE":
-        print("  Status  : NOT GRADED")
-        print("  Reason  : Mango-validity model unavailable.")
-    elif status == "NON_MANGO" or not grade:
+    if status == "NON_MANGO":
         print("  Status  : INVALID – Not a mango")
-        reason = result.get("rejection_reason", "")
         print("  Reason  : Rejected by validity model.")
+    elif not grade:
+        print("  Status  : NO GRADE")
+        print("  Reason  : Prediction unavailable.")
     else:
         # Get confidence
         conf = result.get("grade_confidence")
@@ -478,6 +457,8 @@ def _print_result(result: dict) -> None:
         print(f"  Grade      : {grade.title()}")
         print(f"  Confidence : {conf_pct:.1f}%")
         print(f"  Votes      : {votes}/4 sides agreed")
+        if status == "VALIDITY_UNAVAILABLE":
+            print("  Note       : Mango validation unavailable; this grade is unvalidated.")
         if vc:
             print("  Vote breakdown:")
             for g, v in vc.items():
@@ -518,7 +499,7 @@ def run(
         raise SystemExit(2) from exc
 
     if validity_model is None:
-        print("[Gate] Validity model not found. Grades will be withheld.")
+        print("[Gate] Validity model not found. Grade predictions are unvalidated.")
 
     # ── OLED ───────────────────────────────────────────────────────────────
     oled_device, oled_driver = None, None
@@ -620,12 +601,10 @@ def run(
                 validity_model,
                 grade_model,
                 [captured_paths[s] for s in CAMERA_SIDES],
-                require_validity=True,
             )
-            result = _apply_confidence_gate(result)
 
             per_side = result.get("per_side", {})
-            if per_side and result.get("status") != "VALIDITY_UNAVAILABLE":
+            if per_side:
                 print("[Debug]   Per-side predictions:")
                 for side in CAMERA_SIDES:
                     info = per_side.get(side, {})
@@ -644,17 +623,20 @@ def run(
             if voice:
                 grade = result.get("predicted_grade")
                 status = result.get("status", "")
-                if status == "VALIDITY_UNAVAILABLE":
-                    voice.say_wait("Cannot grade. Mango validation model is unavailable.")
-                elif status == "NON_MANGO" or not grade:
+                if status == "NON_MANGO":
                     voice.say_wait("Result: Invalid. This is not a mango.")
+                elif not grade:
+                    voice.say_wait("No grade prediction is available.")
                 else:
                     confidence = result.get("grade_confidence")
                     if confidence is None:
                         confidence = result.get("average_model_scores", {}).get(grade, 0)
-                    voice.say_wait(
-                        f"Result: {grade}. Confidence {int(confidence * 100)} percent."
+                    validation_note = (
+                        " Mango validation is unavailable; this result is unvalidated."
+                        if status == "VALIDITY_UNAVAILABLE"
+                        else ""
                     )
+                    voice.say_wait(f"Result: {grade}. Confidence {int(confidence * 100)} percent.{validation_note}")
 
             print("[Done] Starting the next four-view capture. Press Ctrl-C to stop.")
             time.sleep(3.0)
