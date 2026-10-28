@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import argparse
 import queue
-import select
 import shutil
 import subprocess
 import sys
@@ -414,18 +413,45 @@ def _save_frame(frame, path: Path) -> None:
 # Trigger / exit helpers
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _wait_for_trigger(gpio_ok: bool) -> None:
+def _start_keyboard_listener() -> queue.Queue[bool]:
+    events: queue.Queue[bool] = queue.Queue()
+
+    def listen() -> None:
+        while True:
+            try:
+                line = sys.stdin.readline()
+            except (OSError, ValueError):
+                return
+            if not line:
+                return
+            events.put(True)
+
+    threading.Thread(target=listen, name="keyboard-trigger", daemon=True).start()
+    return events
+
+
+def _wait_for_trigger(gpio_ok: bool, keyboard_events=None) -> None:
     if gpio_ok:
         while True:
+            if keyboard_events is not None:
+                try:
+                    keyboard_events.get_nowait()
+                    return
+                except queue.Empty:
+                    pass
+
             if _button_pressed(BUTTON_PIN):
                 time.sleep(0.05)
                 while _button_pressed(BUTTON_PIN):
+                    if keyboard_events is not None:
+                        try:
+                            keyboard_events.get_nowait()
+                            return
+                        except queue.Empty:
+                            pass
                     time.sleep(0.02)
                 return
-            ready, _, _ = select.select([sys.stdin], [], [], 0.05)
-            if ready:
-                sys.stdin.readline()
-                return
+            time.sleep(0.05)
     else:
         try:
             input()
@@ -532,6 +558,7 @@ def run(
 
     # ── GPIO button ────────────────────────────────────────────────────────
     gpio_ok = _setup_button(BUTTON_PIN) if use_button else False
+    keyboard_events = _start_keyboard_listener() if gpio_ok else None
 
     # ── Session ────────────────────────────────────────────────────────────
     session_id  = uuid.uuid4().hex[:12]
@@ -572,7 +599,7 @@ def run(
                   f"then press {trig_msg}... ", end="", flush=True)
 
             # Button is listened to RIGHT NOW, even while voice is still speaking
-            _wait_for_trigger(gpio_ok)
+            _wait_for_trigger(gpio_ok, keyboard_events)
 
             # Immediate feedback — user knows button press was registered
             print("capturing...", end=" ", flush=True)

@@ -1,12 +1,14 @@
 import shutil
 import tempfile
 import unittest
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
 from PIL import Image
 
+import rpi_camera
 import use_model
 
 
@@ -112,6 +114,17 @@ class _CaptureCV2:
 
 
 class CameraWorkflowTests(unittest.TestCase):
+    def test_enter_triggers_capture_when_gpio_is_enabled(self):
+        with patch("rpi_camera.sys.stdin", StringIO("\n")):
+            keyboard_events = rpi_camera._start_keyboard_listener()
+            self.assertTrue(keyboard_events.get(timeout=1))
+
+        keyboard_events.put(True)
+        with patch.object(rpi_camera, "_button_pressed", return_value=False):
+            rpi_camera._wait_for_trigger(True, keyboard_events)
+
+        self.assertTrue(keyboard_events.empty())
+
     def test_capture_announcements_are_exact_and_ordered(self):
         self.assertEqual(
             [
