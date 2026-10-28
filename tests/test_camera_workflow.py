@@ -140,6 +140,18 @@ class CameraWorkflowTests(unittest.TestCase):
         self.assertEqual(tuple(model.received_inputs["shape_features"].shape), (1, 8))
         np.testing.assert_allclose(features, np.asarray([0.6, 0.8]))
 
+    def test_rpi_knn_reports_feature_dimension_mismatch(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "database has 576, live extractor produced 592-D features",
+        ):
+            rpi_live_predict.knn_predict(
+                np.zeros(592, dtype=np.float32),
+                np.zeros((1, 576), dtype=np.float32),
+                ["Grade 1"],
+                k=1,
+            )
+
     def test_enter_triggers_capture_when_gpio_is_enabled(self):
         with patch("rpi_camera.sys.stdin", StringIO("\n")):
             keyboard_events = rpi_camera._start_keyboard_listener()

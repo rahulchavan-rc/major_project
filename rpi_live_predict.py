@@ -567,6 +567,7 @@ def build_feature_extractor():
       2. Fresh MobileNetV3Small with ImageNet weights as fallback.
     """
     import tensorflow as tf
+    import use_model
 
     GRADE_CANDIDATES = [
         PROJECT_ROOT / "mobilenetv3_runs" / "best_model.keras",
@@ -579,40 +580,35 @@ def build_feature_extractor():
     if grade_path:
         print(f"[Model] Loading trained model: {grade_path.name}")
         try:
-            full_model = tf.keras.models.load_model(
-                grade_path,
-                custom_objects={
-                    "GlorotUniform": tf.keras.initializers.GlorotUniform,
-                    "GlorotNormal":  tf.keras.initializers.GlorotNormal,
-                },
-                compile=False,
+            full_model = use_model.load_grade_model()
+            feat_layer = full_model.get_layer("cnn_features")
+            image_input = next(
+                (
+                    model_input
+                    for model_input in full_model.inputs
+                    if model_input.name.split(":")[0].split("/")[0] == "image"
+                ),
+                None,
             )
-            feat_layer = None
-            for layer in reversed(full_model.layers):
-                try:
-                    out_shape = layer.output_shape
-                    if isinstance(out_shape, (list, tuple)) and len(out_shape) == 2:
-                        dim = out_shape[-1]
-                        if isinstance(dim, int) and 256 <= dim <= 1024:
-                            feat_layer = layer
-                            break
-                except Exception:
-                    continue
+            if image_input is None:
+                if len(full_model.inputs) != 1:
+                    raise ValueError("Could not find the model's named 'image' input.")
+                image_input = full_model.inputs[0]
 
-            if feat_layer is not None:
-                extractor = tf.keras.Model(inputs=full_model.input,
-                                           outputs=feat_layer.output)
-                print(f"[Model] Extractor → layer '{feat_layer.name}' "
-                      f"shape {feat_layer.output_shape}")
-                return extractor
-            else:
-                extractor = tf.keras.Model(inputs=full_model.inputs,
-                                           outputs=full_model.layers[-2].output)
-                print(f"[Model] Extractor → penultimate layer "
-                      f"{full_model.layers[-2].name}")
-                return extractor
+            feature_dimension = int(feat_layer.output.shape[-1])
+            if feature_dimension != 576:
+                raise ValueError(
+                    f"Expected 576 cnn_features, but the model provides {feature_dimension}."
+                )
+            extractor = tf.keras.Model(inputs=image_input, outputs=feat_layer.output)
+            print(f"[Model] Extractor → layer '{feat_layer.name}' "
+                  f"shape {feat_layer.output.shape}")
+            return extractor
         except Exception as exc:
-            print(f"[Model] Could not tap trained model ({exc}), falling back.")
+            raise RuntimeError(
+                f"Could not build the 576-dimension cnn_features extractor from "
+                f"{grade_path.name}: {exc}"
+            ) from exc
 
     print("[Model] Building fresh MobileNetV3-Small feature extractor…")
     from tensorflow.keras.applications import MobileNetV3Small
@@ -653,6 +649,12 @@ def knn_predict(
     Returns:
         predicted_label, confidence (0-1), top_k list of (label, similarity)
     """
+    if db_features.ndim != 2 or query.ndim != 1 or db_features.shape[1] != query.shape[0]:
+        database_dimension = db_features.shape[1] if db_features.ndim == 2 else "invalid"
+        raise ValueError(
+            f"Feature dimension mismatch: database has {database_dimension}, "
+            f"live extractor produced {query.shape[0]}-D features."
+        )
     sims      = db_features @ query
     top_k_idx = np.argpartition(sims, -k)[-k:]
     top_k_idx = top_k_idx[np.argsort(sims[top_k_idx])[::-1]]
