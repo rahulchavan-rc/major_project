@@ -335,6 +335,7 @@ def predict_captured_views(
     grade_model: tf.keras.Model | None,
     image_paths: list[Path],
     cancel_event: threading.Event | None = None,
+    require_validity: bool = False,
 ) -> dict:
     if len(image_paths) != len(CAMERA_SIDES):
         raise ValueError(
@@ -390,6 +391,25 @@ def predict_captured_views(
             "announcement": "Prediction cancelled.",
         }
     combined = combine_view_predictions(per_side, class_names)
+    if require_validity and validity_model is None:
+        for prediction in per_side.values():
+            if prediction.get("status") == "VALIDITY_UNAVAILABLE":
+                prediction["predicted_grade"] = None
+                prediction["grade_confidence"] = None
+                prediction["class_scores"] = {}
+        combined = {
+            **combined,
+            "status": "VALIDITY_UNAVAILABLE",
+            "predicted_grade": None,
+            "vote_counts": {},
+            "winning_votes": 0,
+            "average_model_scores": {},
+            "announcement": "Cannot grade: mango-validity model is unavailable.",
+            "limitations": [
+                "Mango validation unavailable; no grade was reported.",
+                "External RGB views do not establish internal mango condition.",
+            ],
+        }
     result = {
         "session_id": session_dir.name,
         "preprocessing": {

@@ -1,3 +1,4 @@
+import json
 import shutil
 import tempfile
 import unittest
@@ -114,6 +115,20 @@ class _CaptureCV2:
 
 
 class CameraWorkflowTests(unittest.TestCase):
+    def test_pi_withholds_grade_without_validity_model(self):
+        result = {
+            "status": "VALIDITY_UNAVAILABLE",
+            "predicted_grade": "grade 1",
+            "grade_confidence": 0.99,
+        }
+
+        gated_result = rpi_camera._apply_confidence_gate(result)
+
+        self.assertEqual(gated_result["status"], "VALIDITY_UNAVAILABLE")
+        self.assertIsNone(gated_result["predicted_grade"])
+        self.assertEqual(gated_result["rejection_reason"], "validity_model_unavailable")
+        self.assertEqual(result["predicted_grade"], "grade 1")
+
     def test_enter_triggers_capture_when_gpio_is_enabled(self):
         with patch("rpi_camera.sys.stdin", StringIO("\n")):
             keyboard_events = rpi_camera._start_keyboard_listener()
@@ -124,6 +139,52 @@ class CameraWorkflowTests(unittest.TestCase):
             rpi_camera._wait_for_trigger(True, keyboard_events)
 
         self.assertTrue(keyboard_events.empty())
+
+    def test_pi_repeats_capture_and_prediction_until_interrupted(self):
+        class Camera:
+            def capture_frame(self):
+                return np.zeros((32, 32, 3), dtype=np.uint8)
+
+            def release(self):
+                pass
+
+        trigger_count = 0
+
+        def trigger_until_stopped(*_args):
+            nonlocal trigger_count
+            trigger_count += 1
+            if trigger_count == 9:
+                raise KeyboardInterrupt
+
+        prediction = {
+            "status": "VALIDITY_UNAVAILABLE",
+            "predicted_grade": None,
+            "per_side": {},
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            with (
+                patch.object(rpi_camera, "PROJECT_ROOT", Path(temporary_directory)),
+                patch.object(rpi_camera, "_open_camera", return_value=Camera()),
+                patch.object(rpi_camera, "_setup_button", return_value=False),
+                patch.object(rpi_camera, "_wait_for_trigger", side_effect=trigger_until_stopped),
+                patch.object(rpi_camera, "_laplacian_variance", return_value=100.0),
+                patch.object(rpi_camera, "_save_frame"),
+                patch.object(rpi_camera, "_print_result"),
+                patch.object(rpi_camera, "_oled_result"),
+                patch.object(rpi_camera.time, "sleep"),
+                patch.object(use_model, "load_grade_model", return_value=object()),
+                patch.object(use_model, "load_validity_model", return_value=None),
+                patch.object(
+                    use_model,
+                    "predict_captured_views",
+                    return_value=prediction,
+                ) as predict,
+            ):
+                rpi_camera.run(use_display=False, use_button=False, use_voice=False)
+
+            self.assertEqual(predict.call_count, 2)
+            session_dirs = list((Path(temporary_directory) / "captures").iterdir())
+            self.assertEqual(len(session_dirs), 2)
 
     def test_capture_announcements_are_exact_and_ordered(self):
         self.assertEqual(
@@ -245,14 +306,31 @@ class CameraWorkflowTests(unittest.TestCase):
                 shutil.copyfile(samples[index % len(samples)], path)
                 image_paths.append(path)
 
-            result = use_model.predict_captured_views(None, grade_model, image_paths)
+            result = use_model.predict_captured_views(
+                None,
+                grade_model,
+                image_paths,
+                require_validity=True,
+            )
 
             self.assertEqual(result["session_id"], "sample-session")
             self.assertEqual(result["status"], "VALIDITY_UNAVAILABLE")
-            self.assertEqual(result["predicted_grade"], "grade 1")
-            self.assertEqual(result["vote_counts"]["grade 1"], 3)
+            self.assertIsNone(result["predicted_grade"])
+            self.assertEqual(result["vote_counts"], {})
+            self.assertEqual(
+                result["announcement"],
+                "Cannot grade: mango-validity model is unavailable.",
+            )
             self.assertFalse(result["preprocessing"]["training_compatibility_verified"])
             self.assertTrue((session_dir / "results.json").is_file())
+            saved_result = json.loads((session_dir / "results.json").read_text())
+            self.assertIsNone(saved_result["predicted_grade"])
+            self.assertTrue(
+                all(
+                    side_result["predicted_grade"] is None
+                    for side_result in saved_result["per_side"].values()
+                )
+            )
             for side in use_model.CAMERA_SIDES:
                 processed = np.load(session_dir / "processed" / f"{side}.npy")
                 self.assertEqual(processed.shape, (224, 224, 3))

@@ -10,10 +10,9 @@ Captures 4 views (Right → Left → Front → Back) using a physical button
 using the trained model and shows the final result on a 1.3-inch
 SSD1306 OLED display (128×64, I2C).
 
-Non-mango fallback:
-  When the validity model is not installed, objects whose grade-model
-  confidence is below MIN_CONF_THRESHOLD are marked INVALID so that
-  non-mangoes are not silently graded.
+Validation behavior:
+    A grade is reported only when a mango-validity model is available. If it is
+    missing, the Pi workflow withholds the grade rather than guessing.
 
 Hardware wiring (Raspberry Pi GPIO):
   OLED (SSD1306, I2C):
@@ -55,12 +54,6 @@ OLED_WIDTH   = 128
 OLED_HEIGHT  = 64
 BUTTON_PIN   = 17
 CAPTURE_DELAY = 0.15  # seconds between button release and shutter — allow frame to stabilise
-
-# ── If the validity model is absent, any side whose grade-model confidence
-#    is below this threshold causes the whole result to be marked INVALID.
-#    Tune between 0.30–0.50 depending on your test results.
-MIN_CONF_THRESHOLD = 0.40
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Voice helper (espeak-ng / espeak)
@@ -136,31 +129,15 @@ class _Voice:
 
 def _apply_confidence_gate(result: dict) -> dict:
     """
-    When the validity model is unavailable, use a confidence threshold to
-    reject likely non-mango objects.
-
-    If ANY per-side grade confidence is below MIN_CONF_THRESHOLD, override
-    result status to NON_MANGO and clear the predicted grade.
+    Do not report a grade when the object-validity model is unavailable.
     """
     if result.get("status") != "VALIDITY_UNAVAILABLE":
-        return result   # validity model handled it already
+        return result
 
-    per_side = result.get("per_side", {})
-    low_sides = []
-    for side, side_res in per_side.items():
-        conf = side_res.get("grade_confidence") or 0.0
-        if conf < MIN_CONF_THRESHOLD:
-            low_sides.append(f"{side}({conf*100:.0f}%)")
-
-    if low_sides:
-        print(f"[Gate] Low confidence on sides {low_sides} → marking INVALID")
-        result = dict(result)
-        result["status"]          = "NON_MANGO"
-        result["predicted_grade"] = None
-        result["rejection_reason"] = (
-            f"confidence_below_threshold_{MIN_CONF_THRESHOLD}_on_{','.join(low_sides)}"
-        )
-
+    result = dict(result)
+    result["predicted_grade"] = None
+    result["status"] = "VALIDITY_UNAVAILABLE"
+    result["rejection_reason"] = "validity_model_unavailable"
     return result
 
 
@@ -257,7 +234,9 @@ def _oled_result(device, driver: str, result: dict) -> None:
     status = result.get("status", "")
     grade  = result.get("predicted_grade")
 
-    if status == "NON_MANGO" or not grade:
+    if status == "VALIDITY_UNAVAILABLE":
+        _oled_render(device, driver, ["NO GRADE", "Detector unavailable"])
+    elif status == "NON_MANGO" or not grade:
         # Large INVALID, small explanation
         _oled_render(device, driver, ["INVALID", "Not a mango"])
     else:
@@ -478,14 +457,13 @@ def _print_result(result: dict) -> None:
     status = result.get("status", "UNKNOWN")
     grade  = result.get("predicted_grade")
 
-    if status == "NON_MANGO" or not grade:
+    if status == "VALIDITY_UNAVAILABLE":
+        print("  Status  : NOT GRADED")
+        print("  Reason  : Mango-validity model unavailable.")
+    elif status == "NON_MANGO" or not grade:
         print("  Status  : INVALID – Not a mango")
         reason = result.get("rejection_reason", "")
-        if "confidence_below_threshold" in reason:
-            print(f"  Reason  : Low confidence (threshold={MIN_CONF_THRESHOLD*100:.0f}%)")
-            print("            Object is likely not a mango.")
-        else:
-            print("  Reason  : Rejected by validity model.")
+        print("  Reason  : Rejected by validity model.")
     else:
         # Get confidence
         conf = result.get("grade_confidence")
@@ -500,9 +478,6 @@ def _print_result(result: dict) -> None:
         print(f"  Grade      : {grade.title()}")
         print(f"  Confidence : {conf_pct:.1f}%")
         print(f"  Votes      : {votes}/4 sides agreed")
-        if status == "VALIDITY_UNAVAILABLE":
-            print(f"  ⚠  Note  : Validity model not found. Confidence gate")
-            print(f"             ({MIN_CONF_THRESHOLD*100:.0f}%) was used as fallback.")
         if vc:
             print("  Vote breakdown:")
             for g, v in vc.items():
@@ -543,9 +518,7 @@ def run(
         raise SystemExit(2) from exc
 
     if validity_model is None:
-        print(f"[Gate] Validity model not found. "
-              f"Using confidence threshold ({MIN_CONF_THRESHOLD*100:.0f}%) "
-              f"to reject non-mangoes.")
+        print("[Gate] Validity model not found. Grades will be withheld.")
 
     # ── OLED ───────────────────────────────────────────────────────────────
     oled_device, oled_driver = None, None
@@ -560,18 +533,10 @@ def run(
     gpio_ok = _setup_button(BUTTON_PIN) if use_button else False
     keyboard_events = _start_keyboard_listener() if gpio_ok else None
 
-    # ── Session ────────────────────────────────────────────────────────────
-    session_id  = uuid.uuid4().hex[:12]
-    session_dir = PROJECT_ROOT / "captures" / session_id
-    raw_dir     = session_dir / "raw"
-    raw_dir.mkdir(parents=True, exist_ok=True)
-    captured_paths: dict[str, Path] = {}
-
     trig_msg = "GPIO button or Enter" if gpio_ok else "keyboard Enter"
-    print(f"\n[Session] {session_id}")
-    print(f"[Info]    Capture order: Right → Left → Front → Back")
+    print(f"\n[Info]    Capture order: Right → Left → Front → Back")
     print(f"[Info]    Press {trig_msg} to capture each side.")
-    print(f"[Info]    Ctrl-C to abort.")
+    print(f"[Info]    Press Ctrl-C to stop the repeated capture/prediction loop.")
     print(f"[Tip]     Ensure GOOD, UNIFORM LIGHTING on the mango.")
     print(f"[Tip]     Use a plain, uncluttered background for best accuracy.\n")
 
@@ -582,132 +547,130 @@ def run(
     _save_executor = __import__('concurrent.futures', fromlist=['ThreadPoolExecutor']).ThreadPoolExecutor(max_workers=1)
 
     try:
-        # ── 4-side capture loop ────────────────────────────────────────────
-        _pending_saves = []  # Save frames while the next side is being prepared
+        while True:
+            # Keep each prediction and its source images in a separate session.
+            session_id = uuid.uuid4().hex[:12]
+            session_dir = PROJECT_ROOT / "captures" / session_id
+            raw_dir = session_dir / "raw"
+            raw_dir.mkdir(parents=True, exist_ok=True)
+            captured_paths: dict[str, Path] = {}
+            _pending_saves = []
 
-        for i, side in enumerate(CAMERA_SIDES):
-            # OLED: prompt
-            _oled_status(oled_device, oled_driver,
-                         f"Show {side.title()} side", "Press button")
+            print(f"\n[Session] {session_id}")
 
-            # Voice: NON-BLOCKING — say the prompt then IMMEDIATELY listen
-            # for the button so pressing during speech is NOT missed.
+            # ── Capture four sides ────────────────────────────────────────
+            for i, side in enumerate(CAMERA_SIDES):
+                _oled_status(oled_device, oled_driver,
+                             f"Show {side.title()} side", "Press button")
+
+                if voice:
+                    voice.say(f"Show the {side} side and press the button.")
+
+                print(f"[Capture] Show the {side.upper()} side, "
+                      f"then press {trig_msg}... ", end="", flush=True)
+                _wait_for_trigger(gpio_ok, keyboard_events)
+
+                print("capturing...", end=" ", flush=True)
+                _oled_status(oled_device, oled_driver, "Capturing...", f"{side.title()} side")
+
+                frame = None
+                for attempt in range(1, MAX_CAPTURE_RETRIES + 1):
+                    time.sleep(CAPTURE_DELAY)
+                    candidate = camera.capture_frame()
+                    blur_score = _laplacian_variance(candidate)
+                    print(f"(blur score={blur_score:.1f}, threshold={BLUR_THRESHOLD})", end=" ")
+                    if blur_score >= BLUR_THRESHOLD:
+                        frame = candidate
+                        break
+                    if attempt < MAX_CAPTURE_RETRIES:
+                        print(f"[Warn] Blurry frame (attempt {attempt}/{MAX_CAPTURE_RETRIES}), retrying...")
+                        _oled_status(oled_device, oled_driver,
+                                     "Hold still!", f"Retrying {attempt}/{MAX_CAPTURE_RETRIES}")
+                        if voice:
+                            voice.say("Hold still, retrying.")
+                        time.sleep(0.5)
+                    else:
+                        print(f"[Warn] Still blurry after {MAX_CAPTURE_RETRIES} attempts — using best frame.")
+                        frame = candidate
+
+                photo_path = raw_dir / f"{side}.jpg"
+                captured_paths[side] = photo_path
+                print("captured!")
+                _pending_saves.append(
+                    _save_executor.submit(_save_frame, frame, photo_path)
+                )
+
+                if voice:
+                    voice.say(f"{side} captured.")
+                remaining = 4 - i - 1
+                _oled_status(oled_device, oled_driver,
+                             f"{side.title()} done", f"{i+1}/4 captured")
+                if voice and remaining > 0:
+                    voice.say(f"Now show the {CAMERA_SIDES[i + 1]} side.")
+
+            for save_future in _pending_saves:
+                save_future.result()
+
+            print("\n[Predict] Running 4-view model inference...")
+            _oled_status(oled_device, oled_driver, "Predicting...", "Please wait")
             if voice:
-                voice.say(f"Show the {side} side and press the button.")
+                voice.say_wait("All four sides captured. Predicting now, please wait.")
 
-            print(f"[Capture] Show the {side.upper()} side, "
-                  f"then press {trig_msg}... ", end="", flush=True)
-
-            # Button is listened to RIGHT NOW, even while voice is still speaking
-            _wait_for_trigger(gpio_ok, keyboard_events)
-
-            # Immediate feedback — user knows button press was registered
-            print("capturing...", end=" ", flush=True)
-            _oled_status(oled_device, oled_driver, "Capturing...", f"{side.title()} side")
-
-            # ── Capture with blur/sharpness check — retry if too blurry ───
-            frame = None
-            for attempt in range(1, MAX_CAPTURE_RETRIES + 1):
-                time.sleep(CAPTURE_DELAY)
-                candidate = camera.capture_frame()
-                blur_score = _laplacian_variance(candidate)
-                print(f"(blur score={blur_score:.1f}, threshold={BLUR_THRESHOLD})", end=" ")
-                if blur_score >= BLUR_THRESHOLD:
-                    frame = candidate
-                    break
-                # Frame is too blurry — warn and retry
-                if attempt < MAX_CAPTURE_RETRIES:
-                    print(f"[Warn] Blurry frame (attempt {attempt}/{MAX_CAPTURE_RETRIES}), retrying...")
-                    _oled_status(oled_device, oled_driver,
-                                 "Hold still!", f"Retrying {attempt}/{MAX_CAPTURE_RETRIES}")
-                    if voice:
-                        voice.say("Hold still, retrying.")
-                    time.sleep(0.5)
-                else:
-                    print(f"[Warn] Still blurry after {MAX_CAPTURE_RETRIES} attempts — using best frame.")
-                    frame = candidate  # use it anyway; blurry beats missing
-
-            photo_path = raw_dir / f"{side}.jpg"
-            captured_paths[side] = photo_path
-            print("captured!")
-
-            # Save this frame in the background while user turns the mango
-            _pending_saves.append(
-                _save_executor.submit(_save_frame, frame, photo_path)
+            result = use_model.predict_captured_views(
+                validity_model,
+                grade_model,
+                [captured_paths[s] for s in CAMERA_SIDES],
+                require_validity=True,
             )
+            result = _apply_confidence_gate(result)
 
-            # Immediate audio/OLED feedback
+            per_side = result.get("per_side", {})
+            if per_side and result.get("status") != "VALIDITY_UNAVAILABLE":
+                print("[Debug]   Per-side predictions:")
+                for side in CAMERA_SIDES:
+                    info = per_side.get(side, {})
+                    grade_label = (info.get("predicted_grade") or "?").title()
+                    confidence = (info.get("grade_confidence") or 0) * 100
+                    class_scores = info.get("class_scores", {})
+                    scores_str = "  ".join(
+                        f"{name.replace('grade ', 'G')}:{score*100:.0f}%"
+                        for name, score in class_scores.items()
+                    )
+                    print(f"           {side:5s} → {grade_label} ({confidence:.1f}%)   [{scores_str}]")
+
+            _print_result(result)
+            _oled_result(oled_device, oled_driver, result)
+
             if voice:
-                voice.say(f"{side} captured.")
-            remaining = 4 - i - 1
-            _oled_status(oled_device, oled_driver,
-                         f"{side.title()} done", f"{i+1}/4 captured")
-            if voice and remaining > 0:
-                next_side = CAMERA_SIDES[i + 1]
-                voice.say(f"Now show the {next_side} side.")
+                grade = result.get("predicted_grade")
+                status = result.get("status", "")
+                if status == "VALIDITY_UNAVAILABLE":
+                    voice.say_wait("Cannot grade. Mango validation model is unavailable.")
+                elif status == "NON_MANGO" or not grade:
+                    voice.say_wait("Result: Invalid. This is not a mango.")
+                else:
+                    confidence = result.get("grade_confidence")
+                    if confidence is None:
+                        confidence = result.get("average_model_scores", {}).get(grade, 0)
+                    voice.say_wait(
+                        f"Result: {grade}. Confidence {int(confidence * 100)} percent."
+                    )
 
-        # ── Ensure final frame is saved before inference ──────────────────
-        for save_future in _pending_saves:
-            save_future.result()
-        _save_executor.shutdown(wait=False)
-
-        # ── Predict ────────────────────────────────────────────────────────
-        print("\n[Predict] Running 4-view model inference...")
-        _oled_status(oled_device, oled_driver, "Predicting...", "Please wait")
-        if voice:
-            voice.say_wait("All four sides captured. Predicting now, please wait.")
-
-        result = use_model.predict_captured_views(
-            validity_model,
-            grade_model,
-            [captured_paths[s] for s in CAMERA_SIDES],
-        )
-
-        # Apply confidence gate if validity model was not available
-        result = _apply_confidence_gate(result)
-
-        # ── Per-side debug output ──────────────────────────────────────────
-        per_side = result.get("per_side", {})
-        if per_side:
-            print("[Debug]   Per-side predictions:")
-            for s in CAMERA_SIDES:
-                info = per_side.get(s, {})
-                g  = (info.get("predicted_grade") or "?").title()
-                c  = (info.get("grade_confidence") or 0) * 100
-                cs = info.get("class_scores", {})
-                scores_str = "  ".join(
-                    f"{k.replace('grade ', 'G')}:{v*100:.0f}%" for k, v in cs.items()
-                )
-                print(f"           {s:5s} → {g} ({c:.1f}%)   [{scores_str}]")
-
-        # ── Show result ────────────────────────────────────────────────────
-        _print_result(result)
-        _oled_result(oled_device, oled_driver, result)
-
-        # Voice announcement of final result
-        if voice:
-            grade = result.get("predicted_grade")
-            status = result.get("status", "")
-            if status == "NON_MANGO" or not grade:
-                voice.say_wait("Result: Invalid. This is not a mango.")
-            else:
-                conf = result.get("grade_confidence")
-                if conf is None:
-                    avg = result.get("average_model_scores", {})
-                    conf = avg.get(grade, 0)
-                conf_pct = int(conf * 100)
-                voice.say_wait(
-                    f"Result: {grade}. Confidence {conf_pct} percent."
-                )
-
-        print("[Done] Result on OLED. Press Enter or Ctrl-C to exit.")
-        _wait_for_exit()
+            print("[Done] Starting the next four-view capture. Press Ctrl-C to stop.")
+            time.sleep(3.0)
 
     except KeyboardInterrupt:
         print("\n[Aborted] Interrupted by user.")
+        if not captured_paths:
+            try:
+                raw_dir.rmdir()
+                session_dir.rmdir()
+            except OSError:
+                pass
         if voice:
             voice.say("Aborted.")
     finally:
+        _save_executor.shutdown(wait=True)
         _oled_clear(oled_device, oled_driver)
         camera.release()
         _cleanup_gpio()
