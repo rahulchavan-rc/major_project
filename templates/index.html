@@ -882,6 +882,14 @@
   </div><!-- /.page-wrap -->
 
   <script>
+    /* ── Reset button state on every page load ────────────── */
+    // Browsers (especially Safari/Firefox) can restore DOM state after
+    // navigation, leaving the button stuck with the 'loading' class and
+    // pointer-events:none. Strip it immediately so it is always clickable.
+    document.getElementById('submit-btn').classList.remove('loading');
+    document.getElementById('progress-wrap').classList.remove('active');
+    document.getElementById('progress-label').classList.remove('active');
+
     /* ── File input / drag-and-drop ───────────────────────── */
     const input      = document.getElementById('image');
     const fileNameEl = document.getElementById('file-name');
