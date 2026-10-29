@@ -390,8 +390,13 @@ def _start_keyboard_listener() -> queue.Queue[bool]:
 
 
 def _wait_for_trigger(gpio_ok: bool, keyboard_events=None) -> None:
+    """
+    Block until the physical button is pressed-and-released, OR keyboard Enter.
+    Waits for full release before returning to avoid phantom re-triggers.
+    """
     if gpio_ok:
         while True:
+            # Check for keyboard Enter event first
             if keyboard_events is not None:
                 try:
                     keyboard_events.get_nowait()
@@ -400,17 +405,30 @@ def _wait_for_trigger(gpio_ok: bool, keyboard_events=None) -> None:
                     pass
 
             if _button_pressed(BUTTON_PIN):
-                time.sleep(0.05)
-                while _button_pressed(BUTTON_PIN):
+                # Debounce: confirm it's a real press
+                time.sleep(0.02)
+                if not _button_pressed(BUTTON_PIN):
+                    # Noise spike — ignore
+                    continue
+
+                # Wait for release
+                while _button_pressed(BUTTON_PIN) and not False:
                     if keyboard_events is not None:
                         try:
                             keyboard_events.get_nowait()
+                            # Still wait for physical release to avoid re-trigger
+                            while _button_pressed(BUTTON_PIN):
+                                time.sleep(0.02)
                             return
                         except queue.Empty:
                             pass
                     time.sleep(0.02)
+
+                # Small post-release delay to let contacts settle
+                time.sleep(0.05)
                 return
-            time.sleep(0.05)
+
+            time.sleep(0.02)
     else:
         try:
             input()

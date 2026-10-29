@@ -809,40 +809,40 @@ class _ButtonMonitor:
         print(f"[BTN] {ev.upper()} press detected.")
 
     def _run(self) -> None:
-        last_release: float | None = None
         while not self._stop.is_set():
+            # Wait for button press (active-low)
             if not _button_pressed(self._pin):
                 time.sleep(0.02)
                 continue
 
+            # Measure how long the button is held
             press_start = time.time()
             while _button_pressed(self._pin) and not self._stop.is_set():
                 time.sleep(0.02)
             hold = time.time() - press_start
 
             if hold >= LONG_PRESS_THRESHOLD:
+                # Long press → freeze/unfreeze
                 self._set("long")
-                last_release = None
                 continue
 
-            now = time.time()
-            if last_release is not None and (now - last_release) <= DOUBLE_PRESS_WINDOW:
-                self._set("double")
-                last_release = None
-            else:
-                last_release = now
-                deadline = now + DOUBLE_PRESS_WINDOW
-                pressed_again = False
-                while time.time() < deadline and not self._stop.is_set():
-                    time.sleep(0.05)
-                    if _button_pressed(self._pin):
-                        pressed_again = True
-                        break
-                if not pressed_again:
-                    self._set("short")
-                    last_release = None
+            # Short press — wait for DOUBLE_PRESS_WINDOW to see if a
+            # second press arrives (double-press detection).
+            deadline = time.time() + DOUBLE_PRESS_WINDOW
+            second_press = False
+            while time.time() < deadline and not self._stop.is_set():
+                time.sleep(0.02)
+                if _button_pressed(self._pin):
+                    # Wait for this second press to be released
+                    while _button_pressed(self._pin) and not self._stop.is_set():
+                        time.sleep(0.02)
+                    second_press = True
+                    break
 
-            time.sleep(0.05)
+            if second_press:
+                self._set("double")
+            else:
+                self._set("short")
 
     def stop(self) -> None:
         self._stop.set()
