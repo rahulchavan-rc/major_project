@@ -1,4 +1,5 @@
 import json
+import queue
 import shutil
 import tempfile
 import unittest
@@ -163,6 +164,24 @@ class CameraWorkflowTests(unittest.TestCase):
 
         self.assertTrue(keyboard_events.empty())
 
+    def test_enter_triggers_capture_without_gpio(self):
+        keyboard_events = queue.Queue()
+        keyboard_events.put(True)
+
+        rpi_camera._wait_for_trigger(False, keyboard_events)
+
+        self.assertTrue(keyboard_events.empty())
+
+    def test_physical_button_triggers_capture_with_keyboard_listener_active(self):
+        keyboard_events = queue.Queue()
+        with (
+            patch.object(rpi_camera, "_button_pressed", side_effect=[True, True, False]),
+            patch.object(rpi_camera.time, "sleep"),
+        ):
+            rpi_camera._wait_for_trigger(True, keyboard_events)
+
+        self.assertTrue(keyboard_events.empty())
+
     def test_pi_repeats_capture_and_prediction_until_interrupted(self):
         class Camera:
             def capture_frame(self):
@@ -189,6 +208,7 @@ class CameraWorkflowTests(unittest.TestCase):
                 patch.object(rpi_camera, "PROJECT_ROOT", Path(temporary_directory)),
                 patch.object(rpi_camera, "_open_camera", return_value=Camera()),
                 patch.object(rpi_camera, "_setup_button", return_value=False),
+                patch.object(rpi_camera, "_start_keyboard_listener", return_value=queue.Queue()),
                 patch.object(rpi_camera, "_wait_for_trigger", side_effect=trigger_until_stopped),
                 patch.object(rpi_camera, "_laplacian_variance", return_value=100.0),
                 patch.object(rpi_camera, "_save_frame"),

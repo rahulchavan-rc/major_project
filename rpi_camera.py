@@ -394,46 +394,38 @@ def _wait_for_trigger(gpio_ok: bool, keyboard_events=None) -> None:
     Block until the physical button is pressed-and-released, OR keyboard Enter.
     Waits for full release before returning to avoid phantom re-triggers.
     """
-    if gpio_ok:
-        while True:
-            # Check for keyboard Enter event first
-            if keyboard_events is not None:
-                try:
-                    keyboard_events.get_nowait()
-                    return
-                except queue.Empty:
-                    pass
-
-            if _button_pressed(BUTTON_PIN):
-                # Debounce: confirm it's a real press
-                time.sleep(0.02)
-                if not _button_pressed(BUTTON_PIN):
-                    # Noise spike — ignore
-                    continue
-
-                # Wait for release
-                while _button_pressed(BUTTON_PIN) and not False:
-                    if keyboard_events is not None:
-                        try:
-                            keyboard_events.get_nowait()
-                            # Still wait for physical release to avoid re-trigger
-                            while _button_pressed(BUTTON_PIN):
-                                time.sleep(0.02)
-                            return
-                        except queue.Empty:
-                            pass
-                    time.sleep(0.02)
-
-                # Small post-release delay to let contacts settle
-                time.sleep(0.05)
-                return
-
-            time.sleep(0.02)
-    else:
+    if keyboard_events is None and not gpio_ok:
         try:
             input()
         except EOFError:
-            pass
+            return
+        return
+
+    while True:
+        if keyboard_events is not None:
+            try:
+                keyboard_events.get_nowait()
+                return
+            except queue.Empty:
+                pass
+
+        if gpio_ok and _button_pressed(BUTTON_PIN):
+            time.sleep(0.02)
+            if not _button_pressed(BUTTON_PIN):
+                continue
+
+            while _button_pressed(BUTTON_PIN):
+                if keyboard_events is not None:
+                    try:
+                        keyboard_events.get_nowait()
+                    except queue.Empty:
+                        pass
+                time.sleep(0.02)
+
+            time.sleep(0.05)
+            return
+
+        time.sleep(0.02)
 
 
 def _wait_for_exit():
@@ -530,9 +522,11 @@ def run(
 
     # ── GPIO button ────────────────────────────────────────────────────────
     gpio_ok = _setup_button(BUTTON_PIN) if use_button else False
-    keyboard_events = _start_keyboard_listener() if gpio_ok else None
+    keyboard_events = _start_keyboard_listener()
 
     trig_msg = "GPIO button or Enter" if gpio_ok else "keyboard Enter"
+    oled_trigger_prompt = "Button or Enter" if gpio_ok else "Press Enter"
+    capture_instruction = "press the button or Enter" if gpio_ok else "press Enter"
     print(f"\n[Info]    Capture order: Right → Left → Front → Back")
     print(f"[Info]    Press {trig_msg} to capture each side.")
     print(f"[Info]    Press Ctrl-C to stop the repeated capture/prediction loop.")
@@ -540,7 +534,7 @@ def run(
     print(f"[Tip]     Use a plain, uncluttered background for best accuracy.\n")
 
     if voice:
-        voice.say_wait("Mango grader ready. Place the mango and press the button.")
+        voice.say_wait(f"Mango grader ready. Place the mango and {capture_instruction}.")
 
     # Background save executor — saves JPEG while user prepares next side
     _save_executor = __import__('concurrent.futures', fromlist=['ThreadPoolExecutor']).ThreadPoolExecutor(max_workers=1)
@@ -560,10 +554,10 @@ def run(
             # ── Capture four sides ────────────────────────────────────────
             for i, side in enumerate(CAMERA_SIDES):
                 _oled_status(oled_device, oled_driver,
-                             f"Show {side.title()} side", "Press button")
+                             f"Show {side.title()} side", oled_trigger_prompt)
 
                 if voice:
-                    voice.say(f"Show the {side} side and press the button.")
+                    voice.say(f"Show the {side} side and {capture_instruction}.")
 
                 print(f"[Capture] Show the {side.upper()} side, "
                       f"then press {trig_msg}... ", end="", flush=True)

@@ -195,8 +195,8 @@ python rpi_camera.py --no-button
 ### Capture flow
 
 1. Script loads the trained grade model.
-2. OLED shows **"Show Right — Press button"**.
-3. Position the mango, press the button (or Enter).
+2. OLED shows **"Show Right — Button or Enter"**.
+3. Position the mango, then press the GPIO button or Enter in the terminal.
 4. Repeat for **Left → Front → Back**.
 5. Model runs 4-view inference (majority-vote).
 6. OLED shows the **final grade** and confidence score:
