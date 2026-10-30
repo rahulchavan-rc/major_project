@@ -172,12 +172,8 @@ class CameraWorkflowTests(unittest.TestCase):
             terminal_input.close()
 
     def test_enter_triggers_capture_without_gpio(self):
-        keyboard_events = queue.Queue()
-        keyboard_events.put(True)
-
-        rpi_camera._wait_for_trigger(False, keyboard_events)
-
-        self.assertTrue(keyboard_events.empty())
+        with patch("builtins.input", return_value=""):
+            rpi_camera._wait_for_trigger(False)
 
     def test_physical_button_triggers_capture_with_keyboard_listener_active(self):
         keyboard_events = queue.Queue()
@@ -215,7 +211,7 @@ class CameraWorkflowTests(unittest.TestCase):
                 patch.object(rpi_camera, "PROJECT_ROOT", Path(temporary_directory)),
                 patch.object(rpi_camera, "_open_camera", return_value=Camera()),
                 patch.object(rpi_camera, "_setup_button", return_value=False),
-                patch.object(rpi_camera, "_start_keyboard_listener", return_value=queue.Queue()),
+                patch.object(rpi_camera, "_start_keyboard_listener") as keyboard_listener,
                 patch.object(rpi_camera, "_wait_for_trigger", side_effect=trigger_until_stopped),
                 patch.object(rpi_camera, "_laplacian_variance", return_value=100.0),
                 patch.object(rpi_camera, "_save_frame"),
@@ -233,6 +229,7 @@ class CameraWorkflowTests(unittest.TestCase):
                 rpi_camera.run(use_display=False, use_button=False, use_voice=False)
 
             self.assertEqual(predict.call_count, 2)
+            keyboard_listener.assert_not_called()
             session_dirs = list((Path(temporary_directory) / "captures").iterdir())
             self.assertEqual(len(session_dirs), 2)
 

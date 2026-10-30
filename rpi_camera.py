@@ -529,7 +529,7 @@ def run(
 
     # ── GPIO button ────────────────────────────────────────────────────────
     gpio_ok = _setup_button(BUTTON_PIN) if use_button else False
-    keyboard_events = _start_keyboard_listener()
+    keyboard_events = _start_keyboard_listener() if gpio_ok else None
 
     trig_msg = "GPIO button or Enter" if gpio_ok else "keyboard Enter"
     oled_trigger_prompt = "Button or Enter" if gpio_ok else "Press Enter"
