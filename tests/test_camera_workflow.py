@@ -1,4 +1,6 @@
 import json
+import os
+import pty
 import queue
 import shutil
 import tempfile
@@ -154,15 +156,20 @@ class CameraWorkflowTests(unittest.TestCase):
             )
 
     def test_enter_triggers_capture_when_gpio_is_enabled(self):
-        with patch("rpi_camera.sys.stdin", StringIO("\n")):
-            keyboard_events = rpi_camera._start_keyboard_listener()
-            self.assertTrue(keyboard_events.get(timeout=1))
-
-        keyboard_events.put(True)
-        with patch.object(rpi_camera, "_button_pressed", return_value=False):
-            rpi_camera._wait_for_trigger(True, keyboard_events)
-
-        self.assertTrue(keyboard_events.empty())
+        master_fd, slave_fd = pty.openpty()
+        terminal_input = os.fdopen(slave_fd, "rb", buffering=0)
+        try:
+            with patch("rpi_camera.sys.stdin", terminal_input):
+                keyboard_events = rpi_camera._start_keyboard_listener()
+                os.write(master_fd, b"\n")
+                self.assertTrue(keyboard_events.get(timeout=1))
+                keyboard_events.put(True)
+                with patch.object(rpi_camera, "_button_pressed", return_value=False):
+                    rpi_camera._wait_for_trigger(True, keyboard_events)
+                self.assertTrue(keyboard_events.empty())
+        finally:
+            os.close(master_fd)
+            terminal_input.close()
 
     def test_enter_triggers_capture_without_gpio(self):
         keyboard_events = queue.Queue()

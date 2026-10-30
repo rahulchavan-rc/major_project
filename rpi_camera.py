@@ -35,6 +35,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import queue
 import shutil
 import subprocess
@@ -376,14 +377,20 @@ def _start_keyboard_listener() -> queue.Queue[bool]:
     events: queue.Queue[bool] = queue.Queue()
 
     def listen() -> None:
+        try:
+            stdin_fd = sys.stdin.fileno()
+        except (OSError, ValueError):
+            return
+
         while True:
             try:
-                line = sys.stdin.readline()
+                key = os.read(stdin_fd, 1)
             except (OSError, ValueError):
                 return
-            if not line:
+            if not key:
                 return
-            events.put(True)
+            if key in (b"\n", b"\r"):
+                events.put(True)
 
     threading.Thread(target=listen, name="keyboard-trigger", daemon=True).start()
     return events
