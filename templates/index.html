@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MangoAI – Intelligent Mango Grade Detector</title>
-  <meta name="description" content="Upload a mango photo and let our AI model instantly classify it into Grade 1–4 with confidence scores. Powered by MobileNetV3 deep learning.">
+  <meta name="description" content="Upload front, back, left, and right mango photos to estimate its Grade 1–4 quality with confidence scores. Powered by MobileNetV3 deep learning.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -264,63 +264,11 @@
       margin-bottom: 18px;
     }
 
-    /* ── Drop zone ─────────────────────────────────────────── */
-    .drop-area {
-      min-height: 260px;
-      border: 2px dashed var(--border);
-      border-radius: var(--radius-md);
-      background: rgba(255,255,255,0.02);
-      display: grid;
-      place-items: center;
-      text-align: center;
-      padding: 24px;
-      cursor: pointer;
-      transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
-      position: relative;
-      overflow: hidden;
-    }
-    .drop-area::before {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: radial-gradient(ellipse at center, var(--neon-dim) 0%, transparent 70%);
-      opacity: 0;
-      transition: opacity 0.3s;
-    }
-    .drop-area:hover::before,
-    .drop-area.dragging::before { opacity: 1; }
-    .drop-area:hover,
-    .drop-area.dragging {
-      border-color: var(--neon);
-      box-shadow: 0 0 32px rgba(109,255,92,0.12), inset 0 0 24px rgba(109,255,92,0.05);
-    }
-    .drop-icon {
-      width: 60px; height: 60px;
-      background: linear-gradient(135deg, rgba(109,255,92,0.15), rgba(61,220,132,0.1));
-      border: 1px solid rgba(109,255,92,0.25);
-      border-radius: 18px;
-      display: grid;
-      place-items: center;
-      margin: 0 auto 16px;
-      font-size: 1.6rem;
-      position: relative;
-      animation: iconBob 2.5s ease-in-out infinite;
-    }
-    @keyframes iconBob {
-      0%, 100% { transform: translateY(0); }
-      50% { transform: translateY(-4px); }
-    }
-    .drop-inner { position: relative; }
-    .drop-title {
-      font-weight: 600;
-      font-size: 1rem;
-      margin-bottom: 6px;
-      color: var(--text);
-    }
-    .drop-sub {
+    .upload-hint {
       font-size: 0.85rem;
       color: var(--text-muted);
-      margin-bottom: 18px;
+      margin: 12px 0 0;
+      text-align: center;
     }
     .browse-btn {
       display: inline-block;
@@ -352,17 +300,36 @@
     }
     .file-name.has-file { color: var(--neon); }
 
-    /* ── Preview image inside drop zone ────────────────────── */
-    #preview-img {
+    .view-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .view-upload {
+      min-width: 0;
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: rgba(255,255,255,0.02);
+      text-align: center;
+    }
+    .view-label {
+      display: block;
+      margin-bottom: 10px;
+      color: var(--text);
+      font-weight: 600;
+      text-transform: capitalize;
+    }
+    .view-preview {
       display: none;
-      max-width: 100%;
-      max-height: 200px;
-      margin-top: 14px;
+      width: 100%;
+      height: 110px;
+      margin-top: 12px;
       border-radius: var(--radius-sm);
       object-fit: contain;
-      border: 1px solid var(--border);
+      background: rgba(0,0,0,0.2);
     }
-    #preview-img.visible { display: block; }
+    .view-preview.visible { display: block; }
 
     /* ── Submit button ─────────────────────────────────────── */
     .submit-btn {
@@ -668,6 +635,7 @@
       .page-wrap { padding: 36px 16px 60px; }
       nav { margin-bottom: 40px; }
       .card { padding: 20px; }
+      .view-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -692,7 +660,7 @@
       <div>
         <div class="hero-eyebrow">Mango Quality · Image Grading</div>
         <h1>What grade is<br>your <span class="highlight">mango?</span></h1>
-        <p class="hero-desc">Upload a clear exterior photo and let our deep-learning model instantly classify your mango into one of four quality grades with full confidence scores.</p>
+        <p class="hero-desc">Upload front, back, left, and right photos. Our deep-learning model compares all four mango views to estimate its quality grade.</p>
       </div>
       <div class="hero-img-wrap">
         <img src="{{ url_for('static', filename='mango_hero.jpg') }}" alt="Glowing mango with neon ring" class="hero-img">
@@ -711,7 +679,7 @@
       </div>
       <div class="stat" role="listitem">
         <div class="stat-val">50 MB</div>
-        <div class="stat-label">Max Upload</div>
+        <div class="stat-label">Max Total Upload</div>
       </div>
       <div class="stat" role="listitem">
         <div class="stat-val">RGB</div>
@@ -732,29 +700,29 @@
 
       <!-- Upload card -->
       <section class="card" aria-labelledby="upload-title">
-        <div class="card-title" id="upload-title">&#128228;&nbsp; Upload Image</div>
+        <div class="card-title" id="upload-title">&#128228;&nbsp; Upload Four Views</div>
         <form action="{{ url_for('predict') }}" method="post" enctype="multipart/form-data" id="grade-form">
-          <div class="drop-area" id="drop-area" role="button" tabindex="0" aria-label="Drop mango image here or click to browse">
-            <div class="drop-inner">
-              <div class="drop-icon" aria-hidden="true">&#128247;</div>
-              <div class="drop-title">Drop your mango photo here</div>
-              <div class="drop-sub">JPG, PNG, WebP, BMP or TIFF &middot; up to 50 MB</div>
-              <label class="browse-btn" for="image">Choose image</label>
-              <input id="image" name="image" type="file" accept="image/*" required>
-              <div class="file-name" id="file-name" aria-live="polite">No file selected</div>
+          <div class="view-grid">
+            {% for side in ("front", "back", "left", "right") %}
+            <div class="view-upload">
+              <label class="view-label" for="{{ side }}">{{ side }} view</label>
+              <label class="browse-btn" for="{{ side }}">Choose {{ side }} photo</label>
+              <input id="{{ side }}" name="{{ side }}" type="file" accept="image/*" required>
+              <div class="file-name" id="{{ side }}-file-name" aria-live="polite">No file selected</div>
+              <img class="view-preview" id="{{ side }}-preview" alt="Preview of the mango {{ side }} view">
             </div>
+            {% endfor %}
           </div>
-
-          <img id="preview-img" alt="Preview of your selected mango image">
+          <div class="upload-hint">JPG, PNG, WebP, BMP, or TIFF &middot; all four up to 50 MB</div>
 
           <button type="submit" class="submit-btn" id="submit-btn">
             <span class="btn-text">&#128269;&nbsp; Detect Grade</span>
-            <span class="btn-spinner">&#9203;&nbsp; Analysing image&hellip;</span>
+            <span class="btn-spinner">&#9203;&nbsp; Analysing four views&hellip;</span>
           </button>
           <div class="progress-wrap" id="progress-wrap">
             <div class="progress-bar" id="progress-bar"></div>
           </div>
-          <div class="progress-label" id="progress-label">Running <span>MobileNetV3</span> inference&hellip;</div>
+          <div class="progress-label" id="progress-label">Running <span>four-view MobileNetV3</span> inference&hellip;</div>
         </form>
       </section>
 
@@ -765,7 +733,7 @@
           <div class="steps-list">
             <div class="step-item">
               <div class="step-num">1</div>
-              <div class="step-text">Use one whole mango with the exterior skin clearly visible.</div>
+              <div class="step-text">Capture the same mango from the front, back, left, and right.</div>
             </div>
             <div class="step-item">
               <div class="step-num">2</div>
@@ -777,7 +745,7 @@
             </div>
             <div class="step-item">
               <div class="step-num">4</div>
-              <div class="step-text">Readable image file, max 50 MB and under 20 megapixels.</div>
+              <div class="step-text">Use readable images under 20 megapixels each; all four total up to 50 MB.</div>
             </div>
           </div>
         </div>
@@ -794,7 +762,7 @@
 
         <div class="notice-box">
           <span class="notice-icon">&#9888;&#65039;</span>
-          Model scores are not guaranteed accuracy. A single exterior photo cannot determine the mango's internal condition.
+          Model scores are not guaranteed accuracy. Exterior photos cannot determine the mango's internal condition.
         </div>
       </aside>
 
@@ -891,43 +859,33 @@
     document.getElementById('progress-label').classList.remove('active');
 
     /* ── File input / drag-and-drop ───────────────────────── */
-    const input      = document.getElementById('image');
-    const fileNameEl = document.getElementById('file-name');
-    const dropArea   = document.getElementById('drop-area');
-    const previewImg = document.getElementById('preview-img');
     const form       = document.getElementById('grade-form');
     const submitBtn  = document.getElementById('submit-btn');
+    const sideInputs = ['front', 'back', 'left', 'right'].map(side => ({
+      input: document.getElementById(side),
+      name: document.getElementById(`${side}-file-name`),
+      preview: document.getElementById(`${side}-preview`)
+    }));
 
-    function handleFile(file) {
-      if (!file) return;
-      fileNameEl.textContent = file.name;
-      fileNameEl.classList.add('has-file');
-      const reader = new FileReader();
-      reader.onload = e => {
-        previewImg.src = e.target.result;
-        previewImg.classList.add('visible');
-      };
-      reader.readAsDataURL(file);
-    }
-
-    input.addEventListener('change', () => {
-      if (input.files.length) handleFile(input.files[0]);
-    });
-
-    ['dragenter', 'dragover'].forEach(evt => {
-      dropArea.addEventListener(evt, e => { e.preventDefault(); dropArea.classList.add('dragging'); });
-    });
-    ['dragleave', 'drop'].forEach(evt => {
-      dropArea.addEventListener(evt, e => { e.preventDefault(); dropArea.classList.remove('dragging'); });
-    });
-    dropArea.addEventListener('drop', e => {
-      if (e.dataTransfer.files.length) {
-        input.files = e.dataTransfer.files;
-        handleFile(e.dataTransfer.files[0]);
-      }
-    });
-    dropArea.addEventListener('keydown', e => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); }
+    sideInputs.forEach(({ input, name, preview }) => {
+      input.addEventListener('change', () => {
+        const file = input.files[0];
+        if (!file) {
+          name.textContent = 'No file selected';
+          name.classList.remove('has-file');
+          preview.removeAttribute('src');
+          preview.classList.remove('visible');
+          return;
+        }
+        name.textContent = file.name;
+        name.classList.add('has-file');
+        const reader = new FileReader();
+        reader.onload = event => {
+          preview.src = event.target.result;
+          preview.classList.add('visible');
+        };
+        reader.readAsDataURL(file);
+      });
     });
 
     /* ── Submit loading state ─────────────────────────────── */
@@ -937,7 +895,7 @@
     form.addEventListener('submit', (e) => {
       // Prevent double submission
       if (submitBtn.classList.contains('loading')) { e.preventDefault(); return; }
-      if (!input.files.length) return;   // let HTML5 validation handle empty
+      if (sideInputs.some(({ input }) => !input.files.length)) return;
       submitBtn.classList.add('loading');
       progressWrap.classList.add('active');
       progressLabel.classList.add('active');

@@ -59,9 +59,38 @@ def _render(message: str | None = None, result: dict | None = None, status: int 
     return render_template("index.html", message=message, result=result), status
 
 
+def _decode_uploaded_image(uploaded_file):
+    image_data = uploaded_file.read(MAX_UPLOAD_BYTES + 1)
+    if len(image_data) > MAX_UPLOAD_BYTES:
+        raise ValueError("That image is too large. Choose an image up to 50 MB.")
+
+    image = None
+    try:
+        image = Image.open(BytesIO(image_data))
+        image.load()
+    except (Image.DecompressionBombError, UnidentifiedImageError, OSError, ValueError) as exc:
+        if image is not None:
+            image.close()
+        raise ValueError("The selected file is not a readable image.") from exc
+
+    width, height = image.size
+    if width * height > MAX_IMAGE_PIXELS:
+        image.close()
+        raise ValueError("That image has too many pixels. Choose an image under 20 megapixels.")
+
+    try:
+        image_data = BytesIO()
+        image.convert("RGB").save(image_data, format="PNG")
+        return image_data.getvalue()
+    except (OSError, ValueError) as exc:
+        raise ValueError("The selected file is not a readable image.") from exc
+    finally:
+        image.close()
+
+
 @app.errorhandler(RequestEntityTooLarge)
 def _file_too_large(_error):
-    return _render("That image is too large. Choose an image up to 50 MB.", status=413)
+    return _render("The upload is too large. Choose images totaling up to 50 MB.", status=413)
 
 
 @app.get("/")
@@ -71,38 +100,78 @@ def index():
 
 @app.post("/predict")
 def predict():
-    uploaded_file = request.files.get("image")
-    if uploaded_file is None or not uploaded_file.filename:
-        return _render("Choose an image to continue.", status=400)
-
-    image_data = uploaded_file.read(MAX_UPLOAD_BYTES + 1)
-    if len(image_data) > MAX_UPLOAD_BYTES:
-        return _render("That image is too large. Choose an image up to 50 MB.", status=413)
-
-    # Open once, validate, check pixel count, then save — no double open.
-    try:
-        image = Image.open(BytesIO(image_data))
-        image.load()                         # decode now; catches corrupt files
-        width, height = image.size
-    except (Image.DecompressionBombError, UnidentifiedImageError, OSError, ValueError):
-        return _render("The selected file is not a readable image.", status=400)
-
-    if width * height > MAX_IMAGE_PIXELS:
-        return _render("That image has too many pixels. Choose an image under 20 megapixels.", status=400)
+    side_files = {
+        side: request.files.get(side)
+        for side in ("front", "back", "left", "right")
+    }
+    has_side_upload = any(file and file.filename for file in side_files.values())
+    if has_side_upload:
+        missing_sides = [
+            side for side, file in side_files.items() if file is None or not file.filename
+        ]
+        if missing_sides:
+            return _render(
+                f"Choose an image for every side. Missing: {', '.join(missing_sides)}.",
+                status=400,
+            )
+        try:
+            side_images = {
+                side: _decode_uploaded_image(side_files[side])
+                for side in use_model.CAMERA_SIDES
+            }
+        except ValueError as exc:
+            return _render(str(exc), status=400)
+    else:
+        uploaded_file = request.files.get("image")
+        if uploaded_file is None or not uploaded_file.filename:
+            return _render("Choose an image for each side to continue.", status=400)
+        try:
+            image_data = _decode_uploaded_image(uploaded_file)
+        except ValueError as exc:
+            return _render(str(exc), status=400)
 
     try:
         with tempfile.TemporaryDirectory(prefix="mango-grade-") as temporary_directory:
-            image_path = Path(temporary_directory) / "upload.png"
-            image.convert("RGB").save(image_path, format="PNG")
-            image.close()
             validity_model, grade_model, class_names, validity_names = _get_models()
-            result = use_model.predict_single_image(
-                validity_model,
-                grade_model,
-                class_names,
-                image_path,
-                validity_class_names=validity_names,
-            )
+            if has_side_upload:
+                image_paths = {}
+                for side in use_model.CAMERA_SIDES:
+                    image_path = Path(temporary_directory) / f"{side}.png"
+                    image_path.write_bytes(side_images[side])
+                    image_paths[side] = image_path
+                per_side = {
+                    side: use_model.predict_single_image(
+                        validity_model,
+                        grade_model,
+                        class_names,
+                        image_paths[side],
+                        validity_class_names=validity_names,
+                    )
+                    for side in use_model.CAMERA_SIDES
+                }
+                result = use_model.combine_view_predictions(per_side, class_names)
+                if result["status"] != "NON_MANGO":
+                    class_scores = {
+                        name: sum(
+                            per_side[side]["class_scores"][name]
+                            for side in use_model.CAMERA_SIDES
+                        )
+                        / len(use_model.CAMERA_SIDES)
+                        for name in class_names
+                    }
+                    result["class_scores"] = class_scores
+                    result["grade_confidence"] = class_scores[result["predicted_grade"]]
+                    result["per_side"] = per_side
+            else:
+                image_path = Path(temporary_directory) / "upload.png"
+                image_path.write_bytes(image_data)
+                result = use_model.predict_single_image(
+                    validity_model,
+                    grade_model,
+                    class_names,
+                    image_path,
+                    validity_class_names=validity_names,
+                )
     except FileNotFoundError as exc:
         app.logger.warning("Prediction model or class mapping is unavailable: %s", exc)
         return _render(

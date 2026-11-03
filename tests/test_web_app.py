@@ -18,10 +18,56 @@ class WebAppTests(unittest.TestCase):
         response = self.client.get("/")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b'name="image"', response.data)
-        self.assertIn(b"Detect grade", response.data)
+        for side in ("front", "back", "left", "right"):
+            self.assertIn(f'name="{side}"'.encode(), response.data)
+        self.assertIn(b"Detect Grade", response.data)
         self.assertIn(b"WebP, BMP, or TIFF", response.data)
         self.assertIn(b"up to 50 MB", response.data)
+
+    def test_four_view_upload_combines_predictions_from_each_side(self):
+        image_bytes = BytesIO()
+        Image.new("RGB", (20, 12), color=(220, 120, 30)).save(image_bytes, format="JPEG")
+        side_result = {
+            "status": "VALIDITY_UNAVAILABLE",
+            "validity_status": "UNAVAILABLE",
+            "predicted_grade": "grade 3",
+            "grade_confidence": 0.8,
+            "class_scores": {"grade 1": 0.1, "grade 3": 0.8, "grade 4": 0.1},
+        }
+        with (
+            patch.object(web_app, "_get_models", return_value=(None, object(), ["grade 1", "grade 3", "grade 4"], None)),
+            patch.object(web_app.use_model, "predict_single_image", return_value=side_result) as predict_image,
+        ):
+            response = self.client.post(
+                "/predict",
+                data={
+                    side: (BytesIO(image_bytes.getvalue()), f"{side}.jpg")
+                    for side in ("front", "back", "left", "right")
+                },
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Grade 3", response.data)
+        self.assertIn(b"80.0%", response.data)
+        self.assertEqual(
+            [call.args[3].name for call in predict_image.call_args_list],
+            ["right.png", "left.png", "front.png", "back.png"],
+        )
+        self.assertTrue(all(not call.args[3].exists() for call in predict_image.call_args_list))
+
+    def test_four_view_upload_requires_all_sides(self):
+        image_bytes = BytesIO()
+        Image.new("RGB", (20, 12), color=(220, 120, 30)).save(image_bytes, format="JPEG")
+
+        response = self.client.post(
+            "/predict",
+            data={"front": (BytesIO(image_bytes.getvalue()), "front.jpg")},
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"Choose an image for every side", response.data)
 
     def test_image_upload_returns_grade_and_model_scores(self):
         image_bytes = BytesIO()
@@ -45,7 +91,7 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Grade 3", response.data)
         self.assertIn(b"82.0%", response.data)
-        self.assertIn(b"Mango validation is not configured", response.data)
+        self.assertIn(b"Mango validation model not found", response.data)
         self.assertEqual(predict_image.call_args.args[3].name, "upload.png")
         self.assertFalse(predict_image.call_args.args[3].exists())
 
@@ -96,7 +142,7 @@ class WebAppTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Mango check: Valid", response.data)
+        self.assertIn(b"Mango Verified", response.data)
         self.assertIn(b"Grade 2", response.data)
 
     def test_other_readable_image_formats_are_accepted(self):
@@ -181,6 +227,6 @@ class WebAppTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Invalid for mango grading", response.data)
-        self.assertIn(b"not recognized as a mango", response.data)
+        self.assertIn(b"Invalid", response.data)
+        self.assertIn(b"not recognised as a mango", response.data)
         self.assertNotIn(b"Top model score", response.data)

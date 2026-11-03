@@ -21,12 +21,13 @@ Install the dependencies above, then start the local upload website with:
 python web_app.py
 ```
 
-Open `http://127.0.0.1:5000`, choose a JPEG, PNG, WebP, BMP, or TIFF image, and
-select **Detect grade**. The website converts uploads to RGB PNG before using
-the same preprocessing and trained model as image-file prediction. Uploads are
-limited to 50 MB and 20 megapixels and are removed after prediction. The trained
-grade model and its class mapping must be available at one of the model paths
-described below.
+Open `http://127.0.0.1:5000`, upload one JPEG, PNG, WebP, BMP, or TIFF photo for
+each side (**Front, Back, Left, and Right**), and select **Detect grade**. The
+website converts uploads to RGB PNG, predicts each view, then combines the four
+results using the same majority-vote workflow as the camera. The four uploads
+are limited to 50 MB total and 20 megapixels per image and are removed after
+prediction. The trained grade model and its class mapping must be available at
+one of the model paths described below.
 
 Use `--camera-index N` to select another OpenCV camera. The live preview remains
 active while capturing. Click it once to save each side, in this order:
@@ -247,4 +248,3 @@ If neither is available the script exits with a clear install message.
 | 2nd | `Adafruit_SSD1306` | `pip install Adafruit-SSD1306` |
 
 If no OLED driver is found the result is printed to the terminal only.
-
